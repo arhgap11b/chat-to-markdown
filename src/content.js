@@ -21,6 +21,38 @@
     console.log("[ChatGPT Downloader]", ...args);
   };
 
+  const RESEARCH_COUNTER_KEY = "chatgpt-downloader-research-counter";
+
+  function getResearchCounter() {
+    try {
+      const value = localStorage.getItem(RESEARCH_COUNTER_KEY);
+      return value ? parseInt(value, 10) : 0;
+    } catch (error) {
+      console.error("[ChatGPT Downloader] Failed to read research counter", error);
+      return 0;
+    }
+  }
+
+  function incrementResearchCounter() {
+    try {
+      const current = getResearchCounter();
+      const next = current + 1;
+      localStorage.setItem(RESEARCH_COUNTER_KEY, String(next));
+      return next;
+    } catch (error) {
+      console.error("[ChatGPT Downloader] Failed to increment research counter", error);
+      return 1;
+    }
+  }
+
+  function resetResearchCounter() {
+    try {
+      localStorage.setItem(RESEARCH_COUNTER_KEY, "0");
+    } catch (error) {
+      console.error("[ChatGPT Downloader] Failed to reset research counter", error);
+    }
+  }
+
   const MESSAGE_SELECTORS = [
     "[data-message-author-role]",
     "[data-message-id]",
@@ -193,7 +225,13 @@
   }
 
   function sanitizeFilenameSegment(segment) {
-    return segment.replace(/[^a-z0-9\-_.]/gi, "_").replace(/_{2,}/g, "_");
+    return segment
+      .replace(/[<>:"\/\\|?*\x00-\x1f]/g, "_")
+      .replace(/^\.+/, "")
+      .replace(/\.+$/, "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 200);
   }
 
   function getConversationTitle() {
@@ -319,6 +357,57 @@
     return [...directMatch, ...buttons];
   }
 
+  function attachTooltip(button, text) {
+    let tooltipElement = null;
+
+    const showTooltip = () => {
+      if (tooltipElement) return;
+
+      tooltipElement = document.createElement("div");
+      tooltipElement.textContent = text;
+      tooltipElement.className = "chatgpt-download-tooltip";
+      tooltipElement.setAttribute("role", "tooltip");
+      tooltipElement.style.cssText = `
+        position: fixed;
+        z-index: 10000;
+        background: rgb(0, 0, 0);
+        color: rgb(255, 255, 255);
+        padding: 4px 8px;
+        border-radius: 6px;
+        font-size: 12px;
+        font-weight: 500;
+        line-height: 1.4;
+        pointer-events: none;
+        white-space: nowrap;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+      `;
+
+      document.body.appendChild(tooltipElement);
+
+      const buttonRect = button.getBoundingClientRect();
+      const tooltipRect = tooltipElement.getBoundingClientRect();
+
+      const left = buttonRect.left + (buttonRect.width - tooltipRect.width) / 2;
+      const top = buttonRect.bottom + 8;
+
+      tooltipElement.style.left = `${Math.max(10, Math.min(left, window.innerWidth - tooltipRect.width - 10))}px`;
+      tooltipElement.style.top = `${top}px`;
+    };
+
+    const hideTooltip = () => {
+      if (tooltipElement && tooltipElement.parentNode) {
+        tooltipElement.parentNode.removeChild(tooltipElement);
+      }
+      tooltipElement = null;
+    };
+
+    button.addEventListener("mouseenter", showTooltip);
+    button.addEventListener("mouseleave", hideTooltip);
+    button.addEventListener("click", hideTooltip);
+    button.addEventListener("focus", showTooltip);
+    button.addEventListener("blur", hideTooltip);
+  }
+
   function attachDownloadButtons() {
     const copyButtons = findCopyButtons(document.body);
     if (copyButtons.length !== lastCopyButtonCount) {
@@ -371,17 +460,30 @@
     downloadButton.appendChild(iconWrapper);
     processedCopyButtons.add(copyButton);
     downloadButton.classList.add(MESSAGE_BUTTON_CLASS);
-    downloadButton.setAttribute("aria-label", "Download message");
+
+    const lang = detectLanguage();
+    const messageTooltip = lang === 'ru' ? 'Скачать сообщение' : 'Download message';
+
+    downloadButton.setAttribute("aria-label", messageTooltip);
     downloadButton.setAttribute("data-testid", "download-turn-action-button");
     downloadButton.setAttribute("data-state", "closed");
     downloadButton.setAttribute("aria-pressed", "false");
     downloadButton.setAttribute("data-chatgpt-download-button", "true");
-    downloadButton.removeAttribute("data-tooltip-id");
+
+    attachTooltip(downloadButton, messageTooltip);
 
     downloadButton.addEventListener("click", event => {
       event.stopPropagation();
       event.preventDefault();
-      downloadSingleMessage(messageElement);
+
+      let mode = 'normal';
+      if (event.ctrlKey || event.metaKey) {
+        mode = 'research';
+      } else if (event.shiftKey) {
+        mode = 'skip';
+      }
+
+      downloadSingleMessage(messageElement, mode);
     });
 
     processedCopyButtons.add(downloadButton);
@@ -483,16 +585,35 @@
     };
   }
 
-  function downloadSingleMessage(messageElement) {
+  function downloadSingleMessage(messageElement, mode = 'normal') {
     try {
-      const { markdown, author, index } = buildMessageMarkdown(messageElement);
+      const { markdown, author } = buildMessageMarkdown(messageElement);
       const finalContent = markdown.trim();
       if (!finalContent) {
         throw new Error("Message content is empty");
       }
-      const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, "-");
-      const fileSegment = sanitizeFilenameSegment(`${author}_message_${index + 1}`);
-      downloadAsMarkdown(`ChatGPT_${fileSegment}_${timestamp}.md`, finalContent);
+
+      const lang = detectLanguage();
+      const title = sanitizeFilenameSegment(getConversationTitle());
+      let filename;
+
+      if (author === "User") {
+        const requestPrefix = lang === 'ru' ? 'запрос' : 'request';
+        filename = `${requestPrefix}_${title}.md`;
+      } else {
+        if (mode === 'research') {
+          const analysisPrefix = lang === 'ru' ? 'анализ' : 'analysis';
+          const counter = incrementResearchCounter();
+          filename = `${analysisPrefix}_${counter}_${title}.md`;
+        } else {
+          if (mode === 'normal') {
+            resetResearchCounter();
+          }
+          filename = `${title}.md`;
+        }
+      }
+
+      downloadAsMarkdown(filename, finalContent);
     } catch (error) {
       console.error("ChatGPT Downloader: failed to export message", error);
     }
@@ -528,24 +649,58 @@
     const title = `# ${getConversationTitle()}`;
     const body = parts.join("\n\n---\n\n");
     const markdown = `${title}\n\n${body}`.trim();
-    const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, "-");
-    downloadAsMarkdown(`ChatGPT_Conversation_${timestamp}.md`, markdown);
+    const filename = sanitizeFilenameSegment(getConversationTitle());
+    downloadAsMarkdown(`${filename}.md`, markdown);
+  }
+
+  function detectLanguage() {
+    const htmlLang = document.documentElement.lang;
+    if (htmlLang && htmlLang.startsWith('ru')) {
+      return 'ru';
+    }
+
+    const sampleButton = document.querySelector('button[aria-label]');
+    if (sampleButton) {
+      const label = sampleButton.getAttribute('aria-label');
+      if (label && /[а-яА-Я]/.test(label)) {
+        return 'ru';
+      }
+    }
+
+    return 'en';
   }
 
   function createConversationButton() {
-    if (document.querySelector(`.${CONVERSATION_BUTTON_CLASS}`)) {
+    const voiceButtonContainer = document.querySelector('[data-testid="composer-speech-button-container"]');
+    const existingButton = document.querySelector(`.${CONVERSATION_BUTTON_CLASS}`);
+
+    if (voiceButtonContainer) {
+      const buttonInCorrectPlace = voiceButtonContainer.parentElement?.querySelector(`.${CONVERSATION_BUTTON_CLASS}`);
+
+      if (buttonInCorrectPlace) {
+        return;
+      }
+
+      if (existingButton) {
+        const wrapper = existingButton.closest('[data-chatgpt-download-button="true"]');
+        if (wrapper && wrapper.parentNode) {
+          wrapper.parentNode.removeChild(wrapper);
+          console.info("[ChatGPT Downloader] Removed conversation button from fallback location");
+        }
+      }
+    } else if (existingButton) {
       return;
     }
 
-    const dictateButton = document.querySelector('button[aria-label="Dictate button"]');
-    const dictateWrapper = dictateButton?.parentElement || null;
-    const inlineContainer = dictateWrapper?.parentElement || null;
+    const lang = detectLanguage();
+    const tooltipText = lang === 'ru' ? 'Скачать весь чат' : 'Download chat';
+    const ariaLabel = lang === 'ru' ? 'Скачать весь чат' : 'Download chat';
 
     const button = document.createElement("button");
     button.type = "button";
-    button.className = dictateButton?.className || "composer-btn";
+    button.className = "composer-btn";
     button.classList.add(CONVERSATION_BUTTON_CLASS);
-    button.setAttribute("aria-label", "Download chat");
+    button.setAttribute("aria-label", ariaLabel);
     button.setAttribute("aria-pressed", "false");
     button.innerHTML = `
       <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
@@ -557,6 +712,9 @@
       convoIcon.setAttribute("width", "20");
       convoIcon.setAttribute("height", "20");
     }
+
+    attachTooltip(button, tooltipText);
+
     button.addEventListener("click", event => {
       event.stopPropagation();
       event.preventDefault();
@@ -567,46 +725,33 @@
       }
     });
 
-    if (inlineContainer) {
-      const wrapper = document.createElement(dictateWrapper?.nodeName?.toLowerCase() === "span" ? "span" : "div");
-      wrapper.className = dictateWrapper?.className || "";
-      const state = dictateWrapper?.getAttribute("data-state");
-      if (state) {
-        wrapper.setAttribute("data-state", state);
-      }
+    if (voiceButtonContainer) {
+      const wrapper = document.createElement("span");
+      wrapper.className = "";
+      wrapper.setAttribute("data-state", "closed");
       wrapper.setAttribute("data-chatgpt-download-button", "true");
       wrapper.appendChild(button);
-      inlineContainer.insertBefore(wrapper, dictateWrapper?.nextSibling || null);
+      voiceButtonContainer.insertAdjacentElement("beforebegin", wrapper);
+      console.info("[ChatGPT Downloader] Conversation button inserted (before voice button)");
       return;
     }
 
-    const fallbackTargets = [
-      "div[data-testid='composer-footer-actions']",
-      "form[data-type*='composer'] div[data-testid='composer-footer-actions']",
-      "form[data-type*='composer'] div[role='toolbar']",
-      "form[data-type*='composer']"
-    ];
-
-    let container = null;
-    for (const selector of fallbackTargets) {
-      const candidate = document.querySelector(selector);
-      if (candidate) {
-        container = candidate;
-        break;
-      }
-    }
-
-    if (!container) {
+    const headerActions = document.querySelector('#conversation-header-actions');
+    if (headerActions) {
+      const wrapper = document.createElement("div");
+      wrapper.className = "flex items-center";
+      wrapper.setAttribute("data-chatgpt-download-button", "true");
+      const innerSpan = document.createElement("span");
+      innerSpan.className = "";
+      innerSpan.setAttribute("data-state", "closed");
+      innerSpan.appendChild(button);
+      wrapper.appendChild(innerSpan);
+      headerActions.appendChild(wrapper);
+      console.info("[ChatGPT Downloader] Conversation button inserted (fallback path - header)");
       return;
     }
 
-    const wrapper = document.createElement("div");
-    wrapper.style.display = "flex";
-    wrapper.style.alignItems = "center";
-    wrapper.style.gap = "8px";
-    wrapper.style.marginLeft = "auto";
-    wrapper.appendChild(button);
-    container.appendChild(wrapper);
+    console.warn("[ChatGPT Downloader] No suitable container found for conversation button");
   }
 
   function enhancePage() {
