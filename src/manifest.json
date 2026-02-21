@@ -20,6 +20,20 @@
       "css": [
         "content.css"
       ]
+    },
+    {
+      "matches": [
+        "https://gemini.google.com/*"
+      ],
+      "js": [
+        "vendor/turndown.js",
+        "vendor/turndown-plugin-gfm.js",
+        "content-gemini.js"
+      ],
+      "run_at": "document_idle",
+      "css": [
+        "content-gemini.css"
+      ]
     }
   ],
   "permissions": [
