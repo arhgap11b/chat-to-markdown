@@ -22,9 +22,16 @@
   };
 
   const RESEARCH_COUNTER_KEY = "chatgpt-downloader-research-counter";
+  const RESEARCH_TIMESTAMP_KEY = "chatgpt-downloader-research-ts";
+  const RESEARCH_TTL_MS = 5 * 60 * 1000;
 
   function getResearchCounter() {
     try {
+      const ts = localStorage.getItem(RESEARCH_TIMESTAMP_KEY);
+      if (ts && Date.now() - Number(ts) > RESEARCH_TTL_MS) {
+        localStorage.setItem(RESEARCH_COUNTER_KEY, "0");
+        return 0;
+      }
       const value = localStorage.getItem(RESEARCH_COUNTER_KEY);
       return value ? parseInt(value, 10) : 0;
     } catch (error) {
@@ -38,6 +45,7 @@
       const current = getResearchCounter();
       const next = current + 1;
       localStorage.setItem(RESEARCH_COUNTER_KEY, String(next));
+      localStorage.setItem(RESEARCH_TIMESTAMP_KEY, String(Date.now()));
       return next;
     } catch (error) {
       console.error("[ChatGPT Downloader] Failed to increment research counter", error);
@@ -48,6 +56,7 @@
   function resetResearchCounter() {
     try {
       localStorage.setItem(RESEARCH_COUNTER_KEY, "0");
+      localStorage.removeItem(RESEARCH_TIMESTAMP_KEY);
     } catch (error) {
       console.error("[ChatGPT Downloader] Failed to reset research counter", error);
     }
