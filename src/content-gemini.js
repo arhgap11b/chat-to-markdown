@@ -5,7 +5,7 @@
   }
   window.__geminiDownloaderInjected = true;
   window.__geminiDownloaderVersion = SCRIPT_VERSION;
-  console.info(`[Gemini Downloader] Content script v${SCRIPT_VERSION} loaded`);
+  console.info(`[chat-to-markdown] Content script v${SCRIPT_VERSION} loaded`);
 
   const MESSAGE_BUTTON_CLASS = "gemini-message-download-button";
   const CONVERSATION_BUTTON_CLASS = "gemini-conversation-download-button";
@@ -17,7 +17,7 @@
 
   const debugLog = (...args) => {
     if (!window.__geminiDownloaderDebug) return;
-    console.log("[Gemini Downloader]", ...args);
+    console.log("[chat-to-markdown]", ...args);
   };
 
   function getResearchCounter() {
@@ -30,7 +30,7 @@
       const value = localStorage.getItem(RESEARCH_COUNTER_KEY);
       return value ? parseInt(value, 10) : 0;
     } catch (error) {
-      console.error("[Gemini Downloader] Failed to read research counter", error);
+      console.error("[chat-to-markdown] Failed to read research counter", error);
       return 0;
     }
   }
@@ -43,7 +43,7 @@
       localStorage.setItem(RESEARCH_TIMESTAMP_KEY, String(Date.now()));
       return next;
     } catch (error) {
-      console.error("[Gemini Downloader] Failed to increment research counter", error);
+      console.error("[chat-to-markdown] Failed to increment research counter", error);
       return 1;
     }
   }
@@ -53,7 +53,7 @@
       localStorage.setItem(RESEARCH_COUNTER_KEY, "0");
       localStorage.removeItem(RESEARCH_TIMESTAMP_KEY);
     } catch (error) {
-      console.error("[Gemini Downloader] Failed to reset research counter", error);
+      console.error("[chat-to-markdown] Failed to reset research counter", error);
     }
   }
 
@@ -347,7 +347,7 @@
 
     insertAfter.insertAdjacentElement("afterend", clone);
     boundMessages.add(messageElement);
-    console.info(`[Gemini Downloader] Attached download button to ${tag}`);
+    console.info(`[chat-to-markdown] Attached download button to ${tag}`);
   }
 
   function ensureButtonsForMessage(messageElement, attempt = 0) {
@@ -412,7 +412,7 @@
 
       downloadAsMarkdown(filename, markdown);
     } catch (error) {
-      console.error("[Gemini Downloader] Failed to export message", error);
+      console.error("[chat-to-markdown] Failed to export message", error);
     }
   }
 
@@ -479,13 +479,13 @@
       try {
         downloadConversation();
       } catch (error) {
-        console.error("[Gemini Downloader] Failed to export conversation", error);
+        console.error("[chat-to-markdown] Failed to export conversation", error);
       }
     });
 
     micContainer.insertAdjacentElement("beforebegin", button);
 
-    console.info("[Gemini Downloader] Conversation download button inserted");
+    console.info("[chat-to-markdown] Conversation download button inserted");
   }
 
   function enhancePage() {
@@ -542,12 +542,12 @@
       if (!message || !message.type) return false;
 
       if (message.type === "gemini-downloader:download-conversation") {
-        console.info("[Gemini Downloader] Received request to download conversation");
+        console.info("[chat-to-markdown] Received request to download conversation");
         try {
           downloadConversation();
           sendResponse({ success: true });
         } catch (error) {
-          console.error("[Gemini Downloader] Failed to export conversation", error);
+          console.error("[chat-to-markdown] Failed to export conversation", error);
           sendResponse({ success: false, error: error.message });
         }
         return true;

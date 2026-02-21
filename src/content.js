@@ -5,7 +5,7 @@
   }
   window.__chatgptDownloaderInjected = true;
   window.__chatgptDownloaderVersion = SCRIPT_VERSION;
-  console.info(`[ChatGPT Downloader] Content script v${SCRIPT_VERSION} loaded`);
+  console.info(`[chat-to-markdown] Content script v${SCRIPT_VERSION} loaded`);
 
   const MESSAGE_BUTTON_CLASS = "chatgpt-message-download-button";
   const CONVERSATION_BUTTON_CLASS = "chatgpt-conversation-download-button";
@@ -18,7 +18,7 @@
     if (!window.__chatgptDownloaderDebug) {
       return;
     }
-    console.log("[ChatGPT Downloader]", ...args);
+    console.log("[chat-to-markdown]", ...args);
   };
 
   const RESEARCH_COUNTER_KEY = "chatgpt-downloader-research-counter";
@@ -35,7 +35,7 @@
       const value = localStorage.getItem(RESEARCH_COUNTER_KEY);
       return value ? parseInt(value, 10) : 0;
     } catch (error) {
-      console.error("[ChatGPT Downloader] Failed to read research counter", error);
+      console.error("[chat-to-markdown] Failed to read research counter", error);
       return 0;
     }
   }
@@ -48,7 +48,7 @@
       localStorage.setItem(RESEARCH_TIMESTAMP_KEY, String(Date.now()));
       return next;
     } catch (error) {
-      console.error("[ChatGPT Downloader] Failed to increment research counter", error);
+      console.error("[chat-to-markdown] Failed to increment research counter", error);
       return 1;
     }
   }
@@ -58,7 +58,7 @@
       localStorage.setItem(RESEARCH_COUNTER_KEY, "0");
       localStorage.removeItem(RESEARCH_TIMESTAMP_KEY);
     } catch (error) {
-      console.error("[ChatGPT Downloader] Failed to reset research counter", error);
+      console.error("[chat-to-markdown] Failed to reset research counter", error);
     }
   }
 
@@ -420,7 +420,7 @@
   function attachDownloadButtons() {
     const copyButtons = findCopyButtons(document.body);
     if (copyButtons.length !== lastCopyButtonCount) {
-      console.info(`[ChatGPT Downloader] copy buttons: ${copyButtons.length}`);
+      console.info(`[chat-to-markdown] copy buttons: ${copyButtons.length}`);
       lastCopyButtonCount = copyButtons.length;
     }
     copyButtons.forEach(processCopyButton);
@@ -498,16 +498,16 @@
     processedCopyButtons.add(downloadButton);
     try {
       copyButton.insertAdjacentElement("afterend", downloadButton);
-      console.info(`[ChatGPT Downloader] attached download button for message ${messageElement.getAttribute(MESSAGE_WRAPPER_ATTRIBUTE)}`);
+      console.info(`[chat-to-markdown] attached download button for message ${messageElement.getAttribute(MESSAGE_WRAPPER_ATTRIBUTE)}`);
     } catch (error) {
-      console.error("ChatGPT Downloader: failed to insert download button", error);
+      console.error("chat-to-markdown: failed to insert download button", error);
       processedCopyButtons.delete(downloadButton);
     }
   }
 
   function ensureButtonsForMessage(messageElement, attempt = 0) {
     if (!messageElement) {
-      console.info("[ChatGPT Downloader] ensureButtons: missing message element");
+      console.info("[chat-to-markdown] ensureButtons: missing message element");
       return;
     }
 
@@ -528,7 +528,7 @@
             candidate = next.querySelector(COPY_BUTTON_SELECTOR);
           }
           if (candidate) {
-            console.info(`[ChatGPT Downloader] copy found in sibling depth ${depth}`, next.className || next.tagName);
+            console.info(`[chat-to-markdown] copy found in sibling depth ${depth}`, next.className || next.tagName);
             copyButton = candidate;
             break;
           }
@@ -541,7 +541,7 @@
       }
     }
     if (!copyButton) {
-      console.info(`[ChatGPT Downloader] copy missing (attempt ${attempt})`);
+      console.info(`[chat-to-markdown] copy missing (attempt ${attempt})`);
       if (attempt >= 12) {
         debugLog("Copy button still missing after 12 retries", messageElement);
         return;
@@ -561,7 +561,7 @@
       return;
     }
 
-    console.info(`[ChatGPT Downloader] copy found (attempt ${attempt})`);
+    console.info(`[chat-to-markdown] copy found (attempt ${attempt})`);
     processCopyButton(copyButton);
   }
 
@@ -624,7 +624,7 @@
 
       downloadAsMarkdown(filename, finalContent);
     } catch (error) {
-      console.error("ChatGPT Downloader: failed to export message", error);
+      console.error("chat-to-markdown: failed to export message", error);
     }
   }
 
@@ -694,7 +694,7 @@
         const wrapper = existingButton.closest('[data-chatgpt-download-button="true"]');
         if (wrapper && wrapper.parentNode) {
           wrapper.parentNode.removeChild(wrapper);
-          console.info("[ChatGPT Downloader] Removed conversation button from fallback location");
+          console.info("[chat-to-markdown] Removed conversation button from fallback location");
         }
       }
     } else if (existingButton) {
@@ -730,7 +730,7 @@
       try {
         downloadConversation();
       } catch (error) {
-        console.error("ChatGPT Downloader: failed to export conversation", error);
+        console.error("chat-to-markdown: failed to export conversation", error);
       }
     });
 
@@ -741,7 +741,7 @@
       wrapper.setAttribute("data-chatgpt-download-button", "true");
       wrapper.appendChild(button);
       voiceButtonContainer.insertAdjacentElement("beforebegin", wrapper);
-      console.info("[ChatGPT Downloader] Conversation button inserted (before voice button)");
+      console.info("[chat-to-markdown] Conversation button inserted (before voice button)");
       return;
     }
 
@@ -756,11 +756,11 @@
       innerSpan.appendChild(button);
       wrapper.appendChild(innerSpan);
       headerActions.appendChild(wrapper);
-      console.info("[ChatGPT Downloader] Conversation button inserted (fallback path - header)");
+      console.info("[chat-to-markdown] Conversation button inserted (fallback path - header)");
       return;
     }
 
-    console.warn("[ChatGPT Downloader] No suitable container found for conversation button");
+    console.warn("[chat-to-markdown] No suitable container found for conversation button");
   }
 
   function enhancePage() {
@@ -814,12 +814,12 @@
       }
 
       if (message.type === "chatgpt-downloader:download-conversation") {
-        console.info("[ChatGPT Downloader] Received request to download conversation");
+        console.info("[chat-to-markdown] Received request to download conversation");
         try {
           downloadConversation();
           sendResponse({ success: true });
         } catch (error) {
-          console.error("ChatGPT Downloader: failed to export conversation", error);
+          console.error("chat-to-markdown: failed to export conversation", error);
           sendResponse({ success: false, error: error.message });
         }
         return true;
