@@ -175,10 +175,13 @@
   }
 
   function getConversationTitle() {
-    const convTitle = document.querySelector(".conversation-title")?.textContent?.trim();
-    if (convTitle) return convTitle;
+    const domTitle = document.querySelector('[data-test-id="conversation-title"]')?.textContent?.trim();
+    if (domTitle) return domTitle;
     const rawTitle = document.title?.trim();
-    if (rawTitle && rawTitle !== "Google Gemini") return rawTitle;
+    if (rawTitle) {
+      const cleaned = rawTitle.replace(/\s*[-–—|]\s*Google Gemini\s*$/i, "").trim();
+      if (cleaned && cleaned !== "Google Gemini") return cleaned;
+    }
     return "Conversation with Gemini";
   }
 
@@ -350,31 +353,70 @@
     console.info(`[chat-to-markdown] Attached download button to ${tag}`);
   }
 
+  const pendingObservers = new WeakMap();
+
+  function isCopyButtonReady(messageElement) {
+    const tag = messageElement.tagName?.toLowerCase();
+    if (tag === "model-response") {
+      const copyEl = messageElement.querySelector("copy-button");
+      return !!(copyEl?.querySelector("button"));
+    } else if (tag === "user-query") {
+      return !!messageElement.querySelector('[mattooltip="Copy prompt"], [aria-label="Copy prompt"]');
+    }
+    return false;
+  }
+
+  function watchForCopyButton(messageElement) {
+    if (boundMessages.has(messageElement) || pendingObservers.has(messageElement)) return;
+
+    const innerObserver = new MutationObserver(() => {
+      if (isCopyButtonReady(messageElement)) {
+        innerObserver.disconnect();
+        pendingObservers.delete(messageElement);
+        attachDownloadButton(messageElement);
+      }
+    });
+
+    innerObserver.observe(messageElement, { childList: true, subtree: true });
+    pendingObservers.set(messageElement, innerObserver);
+
+    // Safety timeout: stop observing after 5 minutes
+    setTimeout(() => {
+      if (pendingObservers.has(messageElement)) {
+        innerObserver.disconnect();
+        pendingObservers.delete(messageElement);
+        debugLog(`Gave up waiting for copy button in ${messageElement.tagName}`);
+      }
+    }, 5 * 60 * 1000);
+  }
+
   function ensureButtonsForMessage(messageElement, attempt = 0) {
     if (!messageElement) return;
     if (boundMessages.has(messageElement)) return;
 
-    const tag = messageElement.tagName?.toLowerCase();
-    let ready = false;
-
-    if (tag === "model-response") {
-      const copyEl = messageElement.querySelector("copy-button");
-      ready = !!(copyEl?.querySelector("button"));
-    } else if (tag === "user-query") {
-      ready = !!messageElement.querySelector('[mattooltip="Copy prompt"], [aria-label="Copy prompt"]');
-    }
-
-    if (!ready) {
-      if (attempt >= 20) {
-        debugLog(`Copy button not found after 20 retries for ${tag}`);
-        return;
-      }
-      const delay = attempt < 5 ? 100 : attempt < 10 ? 300 : 500;
-      setTimeout(() => ensureButtonsForMessage(messageElement, attempt + 1), delay);
+    if (isCopyButtonReady(messageElement)) {
+      attachDownloadButton(messageElement);
       return;
     }
 
-    attachDownloadButton(messageElement);
+    // Quick retries for buttons that appear fast
+    if (attempt < 10) {
+      const delay = attempt < 5 ? 100 : 300;
+      setTimeout(() => {
+        if (boundMessages.has(messageElement)) return;
+        if (isCopyButtonReady(messageElement)) {
+          attachDownloadButton(messageElement);
+        } else if (attempt === 9) {
+          // After quick retries, switch to MutationObserver for long-streaming responses
+          watchForCopyButton(messageElement);
+        } else {
+          ensureButtonsForMessage(messageElement, attempt + 1);
+        }
+      }, delay);
+      return;
+    }
+
+    watchForCopyButton(messageElement);
   }
 
   function downloadSingleMessage(messageElement, mode = "normal") {
