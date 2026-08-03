@@ -1,5 +1,5 @@
 (() => {
-  const SCRIPT_VERSION = "2025.10.14-04";
+  const SCRIPT_VERSION = "2026.08.03-10";
   if (window.__chatgptDownloaderInjected) {
     return;
   }
@@ -9,11 +9,16 @@
 
   const MESSAGE_BUTTON_CLASS = "chatgpt-message-download-button";
   const CONVERSATION_BUTTON_CLASS = "chatgpt-conversation-download-button";
+  const EXPORT_DIALOG_CLASS = "chatgpt-export-dialog-overlay";
   const MESSAGE_WRAPPER_ATTRIBUTE = "data-chatgpt-download-index";
   const COPY_BUTTON_SELECTOR = 'button[data-testid="copy-turn-action-button"]';
   const processedCopyButtons = new WeakSet();
   const boundMessages = new WeakSet();
   let lastCopyButtonCount = 0;
+  let conversationExportInProgress = false;
+  let authContextPromise = null;
+  let authContextExpiresAt = 0;
+  const exportCore = globalThis.ChatToMarkdownExport;
   const debugLog = (...args) => {
     if (!window.__chatgptDownloaderDebug) {
       return;
@@ -221,8 +226,7 @@
     return convertHtmlToMarkdown(clone);
   }
 
-  function downloadAsMarkdown(filename, markdown) {
-    const blob = new Blob([markdown], { type: "text/markdown" });
+  function downloadBlob(filename, blob) {
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
@@ -230,7 +234,15 @@
     document.body.appendChild(anchor);
     anchor.click();
     document.body.removeChild(anchor);
-    URL.revokeObjectURL(url);
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }
+
+  function downloadAsMarkdown(filename, markdown) {
+    downloadBlob(filename, new Blob([markdown], { type: "text/markdown" }));
+  }
+
+  function downloadAsJson(filename, json) {
+    downloadBlob(filename, new Blob([json], { type: "application/json" }));
   }
 
   function sanitizeFilenameSegment(segment) {
@@ -471,7 +483,11 @@
     downloadButton.classList.add(MESSAGE_BUTTON_CLASS);
 
     const lang = detectLanguage();
-    const messageTooltip = lang === 'ru' ? 'Скачать сообщение' : 'Download message';
+    const messageTooltip = lang === 'uk'
+      ? 'Завантажити повідомлення'
+      : lang === 'ru'
+        ? 'Скачать сообщение'
+        : 'Download message';
 
     downloadButton.setAttribute("aria-label", messageTooltip);
     downloadButton.setAttribute("data-testid", "download-turn-action-button");
@@ -607,11 +623,11 @@
       let filename;
 
       if (author === "User") {
-        const requestPrefix = lang === 'ru' ? 'запрос' : 'request';
+        const requestPrefix = lang === 'uk' ? 'запит' : lang === 'ru' ? 'запрос' : 'request';
         filename = `${requestPrefix}_${title}.md`;
       } else {
         if (mode === 'research') {
-          const analysisPrefix = lang === 'ru' ? 'анализ' : 'analysis';
+          const analysisPrefix = lang === 'uk' ? 'аналіз' : lang === 'ru' ? 'анализ' : 'analysis';
           const counter = incrementResearchCounter();
           filename = `${analysisPrefix}_${counter}_${title}.md`;
         } else {
@@ -628,7 +644,7 @@
     }
   }
 
-  function downloadConversation() {
+  function buildDomConversationMarkdown() {
     const messages = findMessageElements();
     const parts = [];
     let messageIndex = 0;
@@ -658,20 +674,1350 @@
     const title = `# ${getConversationTitle()}`;
     const body = parts.join("\n\n---\n\n");
     const markdown = `${title}\n\n${body}`.trim();
-    const filename = sanitizeFilenameSegment(getConversationTitle());
-    downloadAsMarkdown(`${filename}.md`, markdown);
+    return markdown;
+  }
+
+  function serializeJsonFile(file) {
+    return {
+      name: String(file.localName || file.name || "file"),
+      direction: file.direction === "input" ? "input" : "output",
+      path: String(file.relativePath || ""),
+      link: String(file.relativeUrl || ""),
+      messageId: String(file.messageId || ""),
+      mimeType: String(file.mimeType || ""),
+      size: Number(file.size) || 0,
+      source: String(file.source || file.type || "unknown")
+    };
+  }
+
+  function buildDomConversationJsonData(title, files) {
+    const exportedFiles = files.map(serializeJsonFile);
+    const filesByMessage = new Map();
+    exportedFiles.forEach(file => {
+      if (!file.messageId) return;
+      const messageFiles = filesByMessage.get(file.messageId) || [];
+      messageFiles.push(file);
+      filesByMessage.set(file.messageId, messageFiles);
+    });
+
+    const messages = [];
+    findMessageElements().forEach(messageElement => {
+      const contentElement = locateContentElement(messageElement);
+      if (!contentElement) return;
+
+      const contentMarkdown = processMessageContent(contentElement, messages.length).trim();
+      if (!contentMarkdown) return;
+
+      const authorLabel = detectAuthor(messageElement);
+      const role = authorLabel === "User" ? "user" : "assistant";
+      const id = messageElement.getAttribute("data-message-id") || `dom-message-${messages.length + 1}`;
+      messages.push({
+        position: messages.length + 1,
+        id,
+        parentId: messages.at(-1)?.id || "",
+        author: {
+          role,
+          label: authorLabel,
+          name: ""
+        },
+        createdAt: null,
+        updatedAt: null,
+        recipient: "all",
+        contentType: "text",
+        contentMarkdown,
+        files: filesByMessage.get(id) || []
+      });
+    });
+
+    return {
+      schemaVersion: 1,
+      conversation: {
+        id: exportCore?.extractConversationId(location.href, getCanonicalConversationUrl()) || "",
+        title,
+        currentNode: messages.at(-1)?.id || "",
+        sourceUrl: location.href,
+        exportedAt: new Date().toISOString()
+      },
+      messages,
+      files: exportedFiles
+    };
+  }
+
+  function stringifyConversationJson(data, files) {
+    const linkedData = {
+      ...data,
+      messages: data.messages.map(message => ({
+        ...message,
+        contentMarkdown: replaceRelativeFileLinks(message.contentMarkdown, files)
+      }))
+    };
+    return `${JSON.stringify(linkedData, null, 2)}\n`;
+  }
+
+  function getCanonicalConversationUrl() {
+    return document.querySelector('link[rel="canonical"]')?.href || "";
+  }
+
+  function getCookie(name) {
+    const prefix = `${encodeURIComponent(name)}=`;
+    const cookie = document.cookie
+      .split(";")
+      .map(value => value.trim())
+      .find(value => value.startsWith(prefix));
+
+    if (!cookie) {
+      return "";
+    }
+
+    try {
+      return decodeURIComponent(cookie.slice(prefix.length));
+    } catch {
+      return cookie.slice(prefix.length);
+    }
+  }
+
+  async function loadAuthContext(forceRefresh = false) {
+    if (!forceRefresh && authContextPromise && Date.now() < authContextExpiresAt) {
+      return authContextPromise;
+    }
+
+    const sessionUrl = new URL("/api/auth/session", location.origin);
+    if (forceRefresh) {
+      sessionUrl.searchParams.set("refresh", "true");
+    }
+
+    authContextPromise = fetch(sessionUrl, {
+      cache: "no-store",
+      credentials: "include",
+      headers: {
+        Accept: "application/json"
+      }
+    }).then(async response => {
+      if (!response.ok) {
+        throw new Error(`Unable to read ChatGPT session (HTTP ${response.status})`);
+      }
+
+      const session = await response.json();
+      if (!session?.accessToken) {
+        throw new Error("ChatGPT session did not contain an access token");
+      }
+
+      const workspaceCookie = getCookie("_account");
+      const accountId = workspaceCookie
+        ? workspaceCookie === "personal" ? "" : workspaceCookie
+        : session.account?.id || "";
+
+      return {
+        accessToken: session.accessToken,
+        accountId: accountId && accountId !== "personal" ? accountId : ""
+      };
+    });
+
+    authContextExpiresAt = Date.now() + 2 * 60 * 1000;
+
+    try {
+      return await authContextPromise;
+    } catch (error) {
+      authContextPromise = null;
+      authContextExpiresAt = 0;
+      throw error;
+    }
+  }
+
+  async function fetchJson(url, options = {}) {
+    const auth = await loadAuthContext(Boolean(options.forceRefresh));
+    const headers = {
+      Accept: "application/json",
+      Authorization: `Bearer ${auth.accessToken}`
+    };
+
+    if (auth.accountId) {
+      headers["ChatGPT-Account-ID"] = encodeURIComponent(auth.accountId);
+    }
+
+    const response = await fetch(url, {
+      credentials: "include",
+      headers
+    });
+
+    if (response.status === 401 && !options.forceRefresh) {
+      return fetchJson(url, { ...options, forceRefresh: true });
+    }
+
+    if (!response.ok) {
+      throw new Error(`ChatGPT API returned HTTP ${response.status}`);
+    }
+
+    return response.json();
+  }
+
+  async function fetchPaginatedConversation(conversationId, onProgress) {
+    const firstUrl = new URL(
+      `/backend-api/conversations/${encodeURIComponent(conversationId)}`,
+      location.origin
+    );
+    firstUrl.searchParams.set("num_turns", "100");
+
+    const firstPage = await fetchJson(firstUrl);
+    let messages = Array.isArray(firstPage.messages) ? [...firstPage.messages] : [];
+    onProgress?.(messages.length);
+    let pageInfo = firstPage.page_info || {};
+    let cursor = pageInfo.has_previous_page ? pageInfo.start_cursor : null;
+    const seenCursors = new Set();
+
+    while (cursor && !seenCursors.has(cursor)) {
+      seenCursors.add(cursor);
+      const pageUrl = new URL(
+        `/backend-api/conversations/${encodeURIComponent(conversationId)}/messages`,
+        location.origin
+      );
+      pageUrl.searchParams.set("before", cursor);
+      pageUrl.searchParams.set("num_turns", "100");
+
+      const page = await fetchJson(pageUrl);
+      const olderMessages = Array.isArray(page.messages) ? page.messages : [];
+      messages = [...olderMessages, ...messages];
+      onProgress?.(messages.length);
+      pageInfo = page.page_info || {};
+      cursor = pageInfo.has_previous_page ? pageInfo.start_cursor : null;
+    }
+
+    return {
+      ...firstPage,
+      id: firstPage.id || conversationId,
+      messages,
+      current_node: messages.at(-1)?.id || firstPage.current_node
+    };
+  }
+
+  async function fetchFullConversation(conversationId, onProgress) {
+    let paginatedError;
+
+    try {
+      const conversation = await fetchPaginatedConversation(conversationId, onProgress);
+      if (Array.isArray(conversation?.messages) && conversation.messages.length) {
+        return conversation;
+      }
+      throw new Error("The paginated conversation response was empty");
+    } catch (error) {
+      paginatedError = error;
+      debugLog("Paginated conversation endpoint failed, trying legacy API", error);
+    }
+
+    const fullUrl = new URL(
+      `/backend-api/conversation/${encodeURIComponent(conversationId)}`,
+      location.origin
+    );
+    fullUrl.searchParams.set("include_full_conversation", "true");
+
+    try {
+      const legacyConversation = await fetchJson(fullUrl);
+      if (legacyConversation?.mapping && Object.keys(legacyConversation.mapping).length) {
+        return legacyConversation;
+      }
+      throw new Error("The legacy full-conversation response was empty");
+    } catch (legacyError) {
+      throw new Error(
+        `Unable to load the full conversation: ${paginatedError.message}; ${legacyError.message}`
+      );
+    }
+  }
+
+  function collectDomFiles() {
+    const files = new Map();
+    const selector = [
+      "a[download]",
+      "a[href^='blob:']",
+      "a[href*='/backend-api/files/']",
+      "a[href*='/backend-api/estuary/']",
+      "a[href*='/backend-api/conversation/'][href*='download']",
+      "a[href*='oaiusercontent.com']"
+    ].join(",");
+
+    document.querySelectorAll(selector).forEach((anchor, index) => {
+      const url = anchor.href || anchor.getAttribute("href");
+      if (!url || files.has(url)) {
+        return;
+      }
+
+      const messageElement = anchor.closest(MESSAGE_NODE_SELECTOR);
+      const direction = messageElement && detectAuthor(messageElement) === "User"
+        ? "input"
+        : "output";
+      let urlFilename = "";
+      try {
+        const parsedUrl = new URL(url, location.href);
+        urlFilename = parsedUrl.searchParams.get("filename")
+          || exportCore?.filenameFromPath(parsedUrl.pathname, "")
+          || "";
+      } catch {
+        urlFilename = "";
+      }
+
+      const name = anchor.download
+        || anchor.getAttribute("download")
+        || anchor.querySelector("[class*='truncate']")?.textContent?.trim()
+        || urlFilename
+        || anchor.textContent?.trim()
+        || `file_${index + 1}`;
+
+      files.set(url, {
+        key: `direct:${url}`,
+        type: "direct",
+        url,
+        name,
+        mimeType: "",
+        size: 0,
+        direction,
+        messageId: messageElement?.getAttribute("data-message-id") || ""
+      });
+    });
+
+    const assistantEntityButtons = Array.from(
+      document.querySelectorAll('[data-message-author-role="assistant"] button.behavior-btn[aria-label]')
+    );
+    const knownFileIconRefs = new Set(
+      assistantEntityButtons
+        .filter(button => looksLikeFilename(decodeDomFilename(button.getAttribute("aria-label"))))
+        .map(button => button.querySelector("svg use")?.getAttribute("href") || "")
+        .filter(Boolean)
+    );
+
+    assistantEntityButtons.forEach((button, index) => {
+      const name = decodeDomFilename(button.getAttribute("aria-label"));
+      const normalizedName = normalizeFileNameForMatch(name);
+      const iconRef = button.querySelector("svg use")?.getAttribute("href") || "";
+      if (!looksLikeFilename(name) && (!iconRef || !knownFileIconRefs.has(iconRef))) {
+        return;
+      }
+
+      const messageElement = button.closest(MESSAGE_NODE_SELECTOR);
+      const messageId = messageElement?.getAttribute("data-message-id") || "";
+      const key = `dom-output:${messageId || index}:${normalizedName}`;
+      if (!files.has(key)) {
+        files.set(key, {
+          key,
+          type: "dom",
+          name,
+          mimeType: "",
+          size: 0,
+          direction: "output",
+          messageId,
+          domElement: button,
+          source: "assistant_file_button"
+        });
+      }
+    });
+
+    return Array.from(files.values());
+  }
+
+  function decodeDomFilename(value) {
+    const name = String(value || "").trim();
+    if (!name) return "";
+    try {
+      return decodeURIComponent(name);
+    } catch {
+      return name;
+    }
+  }
+
+  function looksLikeFilename(value) {
+    return /\.[^.\s\\/]+(?:\.[^.\s\\/]+)?$/.test(String(value || "").trim());
+  }
+
+  function normalizeFileNameForMatch(name) {
+    return String(name || "").normalize("NFKC").trim().toLocaleLowerCase();
+  }
+
+  function mergeConversationFiles(apiFiles, domFiles) {
+    const result = [...apiFiles];
+
+    for (const domFile of domFiles) {
+      const normalizedName = normalizeFileNameForMatch(domFile.name);
+      let match = result.find(file =>
+        file.direction === domFile.direction
+        && normalizeFileNameForMatch(file.name) === normalizedName
+      );
+
+      if (!match && domFile.messageId) {
+        match = result.find(file =>
+          file.direction === domFile.direction
+          && file.messageId === domFile.messageId
+          && /^(?:input|output)_file_\d+(?:\.[a-z0-9]+)?$/i.test(file.name)
+          && !file.domElement
+        );
+        if (match) {
+          match.name = domFile.name;
+        }
+      }
+
+      if (match) {
+        if (domFile.url) match.directUrl = domFile.url;
+        if (domFile.domElement) match.domElement = domFile.domElement;
+        continue;
+      }
+
+      if (!result.some(file => file.url && file.url === domFile.url)) {
+        result.push(domFile);
+      }
+    }
+
+    return result;
+  }
+
+  function makeUniqueFilename(name, usedNames) {
+    const safeName = sanitizeFilenameSegment(name) || "file";
+    const dotIndex = safeName.lastIndexOf(".");
+    const base = dotIndex > 0 ? safeName.slice(0, dotIndex) : safeName;
+    const extension = dotIndex > 0 ? safeName.slice(dotIndex) : "";
+    let candidate = safeName;
+    let counter = 2;
+
+    while (usedNames.has(candidate.toLocaleLowerCase())) {
+      candidate = `${base} (${counter})${extension}`;
+      counter += 1;
+    }
+
+    usedNames.add(candidate.toLocaleLowerCase());
+    return candidate;
+  }
+
+  function encodeRelativeMarkdownPath(path) {
+    return `./${String(path)
+      .split("/")
+      .filter(Boolean)
+      .map(segment => encodeURIComponent(segment))
+      .join("/")}`;
+  }
+
+  function prepareSelectedFilePaths(files) {
+    const usedNames = {
+      input: new Set(),
+      output: new Set()
+    };
+
+    return files.map(file => {
+      const direction = file.direction === "input" ? "input" : "output";
+      const localName = makeUniqueFilename(file.name, usedNames[direction]);
+      const relativePath = `${direction}/${localName}`;
+      return {
+        ...file,
+        localName,
+        relativePath,
+        relativeUrl: encodeRelativeMarkdownPath(relativePath),
+        downloadPath: relativePath
+      };
+    });
+  }
+
+  function escapeMarkdownLabel(value) {
+    return String(value || "").replace(/([\\\[\]])/g, "\\$1");
+  }
+
+  function replaceRelativeFileLinks(markdown, files) {
+    if (!files.length) {
+      return markdown;
+    }
+
+    let linkedMarkdown = markdown;
+    const nameCounts = new Map();
+    files.forEach(file => {
+      const name = normalizeFileNameForMatch(file.name);
+      nameCounts.set(name, (nameCounts.get(name) || 0) + 1);
+    });
+
+    for (const file of files) {
+      if (file.type === "sandbox" && file.sandboxPath) {
+        const sandboxTarget = `sandbox:${file.sandboxPath}`;
+        linkedMarkdown = linkedMarkdown.split(sandboxTarget).join(file.relativeUrl);
+      }
+
+      if (nameCounts.get(normalizeFileNameForMatch(file.name)) !== 1) {
+        continue;
+      }
+
+      const label = escapeMarkdownLabel(file.name);
+      linkedMarkdown = linkedMarkdown
+        .split(`[Attachment: ${file.name}]`)
+        .join(`[Attachment: ${label}](${file.relativeUrl})`)
+        .split(`[Image: ${file.name}]`)
+        .join(`![Image: ${label}](${file.relativeUrl})`)
+        .split(`[Audio: ${file.name}]`)
+        .join(`[Audio: ${label}](${file.relativeUrl})`);
+    }
+
+    return linkedMarkdown;
+  }
+
+  function addRelativeFileLinks(markdown, files) {
+    if (!files.length) {
+      return markdown;
+    }
+
+    const linkedMarkdown = replaceRelativeFileLinks(markdown, files);
+    const strings = getUiStrings();
+    const language = detectLanguage();
+    const indexTitle = language === "uk"
+      ? "Завантажені файли"
+      : language === "ru"
+        ? "Скачанные файлы"
+        : "Downloaded files";
+    const indexLines = [`## ${indexTitle}`];
+
+    for (const direction of ["input", "output"]) {
+      const directionFiles = files.filter(file => file.direction === direction);
+      if (!directionFiles.length) {
+        continue;
+      }
+
+      indexLines.push("", `### ${direction === "input" ? strings.input : strings.output}`, "");
+      directionFiles.forEach(file => {
+        indexLines.push(`- [${escapeMarkdownLabel(file.name)}](${file.relativeUrl})`);
+      });
+    }
+
+    const firstLineEnd = linkedMarkdown.indexOf("\n");
+    if (firstLineEnd === -1) {
+      return `${linkedMarkdown}\n\n${indexLines.join("\n")}`;
+    }
+
+    return `${linkedMarkdown.slice(0, firstLineEnd)}\n\n${indexLines.join("\n")}\n${linkedMarkdown.slice(firstLineEnd)}`;
+  }
+
+  function formatFileSize(size) {
+    const bytes = Number(size) || 0;
+    if (!bytes) return "";
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  function getUiStrings() {
+    const language = detectLanguage();
+
+    if (language === "uk") {
+      return {
+        title: "Експорт чату",
+        description: "Markdown і JSON будуть у корені експорту, а вибрані вкладення — окремо в папках input/output з правильними відносними посиланнями. Якщо загалом файлів більше двох, буде завантажено один ZIP-архів.",
+        context: "Контекст чату (Markdown + JSON)",
+        input: "Вхідні файли",
+        output: "Вихідні файли",
+        selectAll: "Вибрати все",
+        cancel: "Скасувати",
+        download: "Завантажити контекст і вибрані файли",
+        loading: "Отримую повний чат…",
+        loadedMessages: "Отримано повідомлень: {count}",
+        downloadingFiles: "Завантажую файли: {current}/{total}",
+        started: "Завантаження розпочато",
+        failedFiles: "Не вдалося завантажити",
+        directionInput: "Вхідний",
+        directionOutput: "Вихідний",
+        pageFallback: "Файл знайдено на сторінці",
+        fallbackNotice: "Частину файлів ChatGPT приховав від API, тому вони завантажуються через кнопки сторінки без ZIP",
+        creatingArchive: "Створюю архів: {current}/{total}",
+        archiveStarted: "Архів готовий і завантажується",
+        archivePartial: "Архів завантажено, але не вдалося додати",
+        archiveFailed: "Не вдалося створити архів",
+        fullChatError: "Не вдалося отримати повний контекст чату"
+      };
+    }
+
+    if (language === "ru") {
+      return {
+        title: "Экспорт чата",
+        description: "Markdown и JSON будут в корне экспорта, а выбранные вложения — отдельно в папках input/output с правильными относительными ссылками. Если всего файлов больше двух, скачается один ZIP-архив.",
+        context: "Контекст чата (Markdown + JSON)",
+        input: "Входные файлы",
+        output: "Выходные файлы",
+        selectAll: "Выбрать все",
+        cancel: "Отмена",
+        download: "Скачать контекст и выбранные файлы",
+        loading: "Получаю полный чат…",
+        loadedMessages: "Получено сообщений: {count}",
+        downloadingFiles: "Скачиваю файлы: {current}/{total}",
+        started: "Скачивание началось",
+        failedFiles: "Не удалось скачать",
+        directionInput: "Входной",
+        directionOutput: "Выходной",
+        pageFallback: "Файл найден на странице",
+        fallbackNotice: "Часть файлов ChatGPT скрыл от API, поэтому они скачиваются через кнопки страницы без ZIP",
+        creatingArchive: "Создаю архив: {current}/{total}",
+        archiveStarted: "Архив готов и скачивается",
+        archivePartial: "Архив скачан, но не удалось добавить",
+        archiveFailed: "Не удалось создать архив",
+        fullChatError: "Не удалось получить полный контекст чата"
+      };
+    }
+
+    return {
+      title: "Export chat",
+      description: "Markdown and JSON stay at the export root. Selected attachments go into separate input/output folders with correct relative links. If there are more than two files in total, one ZIP archive is downloaded.",
+      context: "Chat context (Markdown + JSON)",
+      input: "Input files",
+      output: "Output files",
+      selectAll: "Select all",
+      cancel: "Cancel",
+      download: "Download context and selected files",
+      loading: "Loading the full chat…",
+      loadedMessages: "Messages loaded: {count}",
+      downloadingFiles: "Downloading files: {current}/{total}",
+      started: "Downloads started",
+      failedFiles: "Failed to download",
+      directionInput: "Input",
+      directionOutput: "Output",
+      pageFallback: "File detected on the page",
+      fallbackNotice: "ChatGPT hid some files from the API, so they are downloaded through page buttons without ZIP packaging",
+      creatingArchive: "Creating archive: {current}/{total}",
+      archiveStarted: "Archive is ready and downloading",
+      archivePartial: "Archive downloaded, but these files could not be added",
+      archiveFailed: "Unable to create archive",
+      fullChatError: "Unable to load the full chat context"
+    };
+  }
+
+  function showToast(message, isError = false) {
+    const existing = document.querySelector(".chatgpt-export-toast");
+    existing?.remove();
+
+    const toast = document.createElement("div");
+    toast.className = `chatgpt-export-toast${isError ? " is-error" : ""}`;
+    toast.setAttribute("role", isError ? "alert" : "status");
+    toast.textContent = message;
+    document.body.appendChild(toast);
+
+    window.setTimeout(() => toast.remove(), isError ? 8000 : 4000);
+  }
+
+  function createProgressToast(message, current = null, total = null) {
+    document.querySelector(".chatgpt-export-toast")?.remove();
+
+    const toast = document.createElement("div");
+    toast.className = "chatgpt-export-toast chatgpt-export-progress-toast";
+    toast.setAttribute("role", "status");
+    toast.setAttribute("aria-live", "polite");
+
+    const heading = document.createElement("div");
+    heading.className = "chatgpt-export-progress-heading";
+    const indicator = document.createElement("span");
+    indicator.className = "chatgpt-export-progress-indicator";
+    indicator.setAttribute("aria-hidden", "true");
+    const label = document.createElement("span");
+    label.className = "chatgpt-export-progress-label";
+    const value = document.createElement("span");
+    value.className = "chatgpt-export-progress-value";
+    heading.append(indicator, label, value);
+
+    const track = document.createElement("div");
+    track.className = "chatgpt-export-progress-track";
+    const fill = document.createElement("div");
+    fill.className = "chatgpt-export-progress-fill";
+    track.appendChild(fill);
+    toast.append(heading, track);
+    document.body.appendChild(toast);
+
+    function update(nextMessage, nextCurrent = null, nextTotal = null) {
+      label.textContent = nextMessage;
+      const determinate = Number.isFinite(nextCurrent)
+        && Number.isFinite(nextTotal)
+        && nextTotal > 0;
+      toast.classList.toggle("is-indeterminate", !determinate);
+
+      if (determinate) {
+        const percent = Math.max(0, Math.min(100, Math.round((nextCurrent / nextTotal) * 100)));
+        fill.style.setProperty("--chatgpt-export-progress", `${percent}%`);
+        value.textContent = `${percent}%`;
+        track.setAttribute("role", "progressbar");
+        track.setAttribute("aria-valuemin", "0");
+        track.setAttribute("aria-valuemax", "100");
+        track.setAttribute("aria-valuenow", String(percent));
+      } else {
+        fill.style.removeProperty("--chatgpt-export-progress");
+        value.textContent = "";
+        track.removeAttribute("role");
+        track.removeAttribute("aria-valuemin");
+        track.removeAttribute("aria-valuemax");
+        track.removeAttribute("aria-valuenow");
+      }
+    }
+
+    update(message, current, total);
+    return {
+      element: toast,
+      update,
+      remove: () => toast.remove()
+    };
+  }
+
+  function showDownloadPicker(files, markdownFilename, jsonFilename) {
+    const strings = getUiStrings();
+    document.querySelector(`.${EXPORT_DIALOG_CLASS}`)?.remove();
+
+    return new Promise(resolve => {
+      const overlay = document.createElement("div");
+      overlay.className = EXPORT_DIALOG_CLASS;
+
+      const dialog = document.createElement("div");
+      dialog.className = "chatgpt-export-dialog";
+      dialog.setAttribute("role", "dialog");
+      dialog.setAttribute("aria-modal", "true");
+      dialog.setAttribute("aria-labelledby", "chatgpt-export-dialog-title");
+
+      const header = document.createElement("div");
+      header.className = "chatgpt-export-dialog-header";
+      const heading = document.createElement("h2");
+      heading.id = "chatgpt-export-dialog-title";
+      heading.textContent = strings.title;
+      const closeButton = document.createElement("button");
+      closeButton.type = "button";
+      closeButton.className = "chatgpt-export-dialog-close";
+      closeButton.setAttribute("aria-label", strings.cancel);
+      closeButton.textContent = "×";
+      header.append(heading, closeButton);
+
+      const description = document.createElement("p");
+      description.className = "chatgpt-export-dialog-description";
+      description.textContent = strings.description;
+
+      const contextRow = document.createElement("div");
+      contextRow.className = "chatgpt-export-context-row";
+      const contextIcon = document.createElement("span");
+      contextIcon.textContent = "✓";
+      const contextText = document.createElement("span");
+      contextText.textContent = `${strings.context}: ${markdownFilename}, ${jsonFilename}`;
+      contextRow.append(contextIcon, contextText);
+
+      const body = document.createElement("div");
+      body.className = "chatgpt-export-dialog-body";
+      const itemCheckboxes = new Map();
+      const directionSelectors = new Map();
+
+      function addGroup(direction) {
+        const groupFiles = files.filter(file => file.direction === direction);
+        if (!groupFiles.length) {
+          return;
+        }
+
+        const section = document.createElement("section");
+        section.className = "chatgpt-export-file-group";
+        const groupHeader = document.createElement("label");
+        groupHeader.className = "chatgpt-export-file-group-header";
+        const groupCheckbox = document.createElement("input");
+        groupCheckbox.type = "checkbox";
+        groupCheckbox.checked = true;
+        const groupTitle = document.createElement("span");
+        groupTitle.textContent = `${direction === "input" ? strings.input : strings.output} (${groupFiles.length})`;
+        const selectAllText = document.createElement("span");
+        selectAllText.className = "chatgpt-export-select-all";
+        selectAllText.textContent = strings.selectAll;
+        groupHeader.append(groupCheckbox, groupTitle, selectAllText);
+        section.appendChild(groupHeader);
+
+        const groupItemCheckboxes = [];
+        groupFiles.forEach(file => {
+          const row = document.createElement("div");
+          row.className = "chatgpt-export-file-row";
+          const checkbox = document.createElement("input");
+          checkbox.type = "checkbox";
+          checkbox.checked = true;
+          const details = document.createElement("span");
+          details.className = "chatgpt-export-file-details";
+          const name = document.createElement("span");
+          name.className = "chatgpt-export-file-name";
+          name.textContent = file.name;
+          details.appendChild(name);
+
+          const size = formatFileSize(file.size);
+          if (size || file.mimeType) {
+            const meta = document.createElement("span");
+            meta.className = "chatgpt-export-file-meta";
+            meta.textContent = [size, file.mimeType].filter(Boolean).join(" · ");
+            details.appendChild(meta);
+          }
+
+          if (file.type === "dom") {
+            const meta = document.createElement("span");
+            meta.className = "chatgpt-export-file-meta";
+            meta.textContent = strings.pageFallback;
+            details.appendChild(meta);
+          }
+
+          const directionSelect = document.createElement("select");
+          directionSelect.className = "chatgpt-export-direction-select";
+          directionSelect.setAttribute("aria-label", `${file.name}: ${strings.input}/${strings.output}`);
+          const inputOption = document.createElement("option");
+          inputOption.value = "input";
+          inputOption.textContent = strings.directionInput;
+          const outputOption = document.createElement("option");
+          outputOption.value = "output";
+          outputOption.textContent = strings.directionOutput;
+          directionSelect.append(inputOption, outputOption);
+          directionSelect.value = file.direction;
+          directionSelect.addEventListener("click", event => event.stopPropagation());
+          directionSelect.addEventListener("change", event => event.stopPropagation());
+
+          row.append(checkbox, details, directionSelect);
+          section.appendChild(row);
+          itemCheckboxes.set(file.key, checkbox);
+          directionSelectors.set(file.key, directionSelect);
+          groupItemCheckboxes.push(checkbox);
+
+          row.addEventListener("click", event => {
+            if (event.target === checkbox || directionSelect.contains(event.target)) return;
+            checkbox.click();
+          });
+
+          checkbox.addEventListener("change", () => {
+            const checkedCount = groupItemCheckboxes.filter(item => item.checked).length;
+            groupCheckbox.checked = checkedCount === groupItemCheckboxes.length;
+            groupCheckbox.indeterminate = checkedCount > 0 && checkedCount < groupItemCheckboxes.length;
+          });
+        });
+
+        groupCheckbox.addEventListener("change", () => {
+          groupItemCheckboxes.forEach(checkbox => {
+            checkbox.checked = groupCheckbox.checked;
+          });
+          groupCheckbox.indeterminate = false;
+        });
+
+        body.appendChild(section);
+      }
+
+      addGroup("input");
+      addGroup("output");
+
+      const footer = document.createElement("div");
+      footer.className = "chatgpt-export-dialog-footer";
+      const cancelButton = document.createElement("button");
+      cancelButton.type = "button";
+      cancelButton.className = "chatgpt-export-secondary-button";
+      cancelButton.textContent = strings.cancel;
+      const downloadButton = document.createElement("button");
+      downloadButton.type = "button";
+      downloadButton.className = "chatgpt-export-primary-button";
+      downloadButton.textContent = strings.download;
+      footer.append(cancelButton, downloadButton);
+
+      dialog.append(header, description, contextRow, body, footer);
+      overlay.appendChild(dialog);
+      document.body.appendChild(overlay);
+
+      const onKeyDown = event => {
+        if (event.key === "Escape") {
+          finish(null);
+        }
+      };
+
+      function finish(value) {
+        document.removeEventListener("keydown", onKeyDown);
+        overlay.remove();
+        resolve(value);
+      }
+
+      closeButton.addEventListener("click", () => finish(null));
+      cancelButton.addEventListener("click", () => finish(null));
+      downloadButton.addEventListener("click", () => {
+        finish(files
+          .filter(file => itemCheckboxes.get(file.key)?.checked)
+          .map(file => ({
+            ...file,
+            direction: directionSelectors.get(file.key)?.value || file.direction
+          })));
+      });
+      overlay.addEventListener("click", event => {
+        if (event.target === overlay) {
+          finish(null);
+        }
+      });
+      document.addEventListener("keydown", onKeyDown);
+      window.setTimeout(() => downloadButton.focus(), 0);
+    });
+  }
+
+  function wait(ms) {
+    return new Promise(resolve => window.setTimeout(resolve, ms));
+  }
+
+  async function requestDownloadUrl(url) {
+    let lastError = null;
+
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      try {
+        const payload = await fetchJson(url);
+        if (payload?.download_url) {
+          return payload.download_url;
+        }
+
+        const status = String(payload?.status || "").toLowerCase();
+        if (status !== "retry") {
+          throw new Error(payload?.error_code || "Missing download URL");
+        }
+      } catch (error) {
+        lastError = error;
+        if (attempt === 3) {
+          break;
+        }
+      }
+
+      await wait(500 * (attempt + 1));
+    }
+
+    throw lastError || new Error("Unable to prepare file download");
+  }
+
+  async function resolveFileDownloadUrl(file, conversationId) {
+    if (file.directUrl) {
+      return file.directUrl;
+    }
+
+    if (file.type === "direct" && file.url) {
+      return file.url;
+    }
+
+    if (!conversationId) {
+      throw new Error("Missing conversation ID");
+    }
+
+    if (file.type === "sandbox") {
+      if (!file.messageId || !file.sandboxPath) {
+        throw new Error("Incomplete sandbox file metadata");
+      }
+
+      const url = new URL(
+        `/backend-api/conversation/${encodeURIComponent(conversationId)}/interpreter/download`,
+        location.origin
+      );
+      url.searchParams.set("message_id", file.messageId);
+      url.searchParams.set("sandbox_path", file.sandboxPath);
+      url.searchParams.set("download_intent", "true");
+      return requestDownloadUrl(url);
+    }
+
+    if (file.type === "file" && file.fileId) {
+      const normalizedId = file.fileId.replaceAll("#", "*");
+      const url = new URL(
+        `/backend-api/files/download/${encodeURIComponent(normalizedId)}`,
+        location.origin
+      );
+      url.searchParams.set("conversation_id", conversationId);
+      url.searchParams.set("check_context_scopes_for_conversation_id", conversationId);
+      url.searchParams.set("download_intent", "true");
+      return requestDownloadUrl(url);
+    }
+
+    throw new Error("Unsupported file reference");
+  }
+
+  function sanitizeDownloadRelativePath(path) {
+    const segments = String(path || "")
+      .replaceAll("\\", "/")
+      .split("/")
+      .filter(segment => segment && segment !== "." && segment !== "..")
+      .map(segment => sanitizeFilenameSegment(segment))
+      .filter(Boolean);
+    return segments.join("/") || "download";
+  }
+
+  function queueBrowserDownload(url, filename) {
+    return new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage(
+        {
+          type: "chat-to-markdown:download-url",
+          url,
+          filename: sanitizeDownloadRelativePath(filename)
+        },
+        response => {
+          const runtimeError = chrome.runtime.lastError;
+          if (runtimeError) {
+            reject(new Error(runtimeError.message));
+            return;
+          }
+          if (!response?.success) {
+            reject(new Error(response?.error || "Browser rejected the download"));
+            return;
+          }
+          resolve(response.downloadId);
+        }
+      );
+    });
+  }
+
+  function sendRuntimeMessage(message) {
+    return new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage(message, response => {
+        const runtimeError = chrome.runtime.lastError;
+        if (runtimeError) {
+          reject(new Error(runtimeError.message));
+          return;
+        }
+        if (!response?.success) {
+          reject(new Error(response?.error || "Extension request failed"));
+          return;
+        }
+        resolve(response);
+      });
+    });
+  }
+
+  async function queueDomButtonDownload(file) {
+    const button = file.domElement;
+    if (!(button instanceof HTMLElement) || !button.isConnected) {
+      throw new Error("The ChatGPT file button is no longer available");
+    }
+
+    const armed = await sendRuntimeMessage({
+      type: "chat-to-markdown:arm-page-download",
+      filename: sanitizeDownloadRelativePath(file.downloadPath || file.name),
+      expectedName: file.name
+    });
+
+    button.click();
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      await wait(250);
+      const status = await sendRuntimeMessage({
+        type: "chat-to-markdown:page-download-status",
+        token: armed.token
+      });
+      if (status.started) return status.downloadId;
+      if (status.expired) break;
+    }
+
+    await sendRuntimeMessage({
+      type: "chat-to-markdown:disarm-page-download",
+      token: armed.token
+    });
+
+    throw new Error("ChatGPT did not start the file download");
+  }
+
+  async function downloadSelectedFiles(files, conversationId, onProgress) {
+    const failures = [];
+    let completed = 0;
+
+    for (const file of files) {
+      try {
+        if (file.type === "dom") {
+          await queueDomButtonDownload(file);
+          continue;
+        }
+        const url = await resolveFileDownloadUrl(file, conversationId);
+        await queueBrowserDownload(url, file.downloadPath || file.name);
+      } catch (error) {
+        console.error("chat-to-markdown: failed to download file", file, error);
+        failures.push({ file, error });
+      } finally {
+        completed += 1;
+        onProgress?.(completed, files.length);
+      }
+    }
+
+    return failures;
+  }
+
+  function formatArchiveProgress(strings, current, total) {
+    return strings.creatingArchive
+      .replace("{current}", String(current))
+      .replace("{total}", String(total));
+  }
+
+  function formatDownloadProgress(strings, current, total) {
+    return strings.downloadingFiles
+      .replace("{current}", String(current))
+      .replace("{total}", String(total));
+  }
+
+  async function fetchArchiveFile(file, conversationId) {
+    const url = await resolveFileDownloadUrl(file, conversationId);
+    const resolvedUrl = new URL(url, location.href);
+    const response = await fetch(resolvedUrl.href, {
+      credentials: resolvedUrl.origin === location.origin ? "include" : "omit"
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    return response;
+  }
+
+  async function pushResponseToZip(zip, filename, response) {
+    const entry = new fflate.ZipPassThrough(sanitizeDownloadRelativePath(filename));
+    zip.add(entry);
+
+    if (!response.body?.getReader) {
+      entry.push(new Uint8Array(await response.arrayBuffer()), true);
+      return;
+    }
+
+    const reader = response.body.getReader();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        entry.push(new Uint8Array(0), true);
+        return;
+      }
+      entry.push(value, false);
+    }
+  }
+
+  function createExportArchive(documents, files, conversationId, onProgress) {
+    if (!globalThis.fflate?.Zip || !globalThis.fflate?.ZipPassThrough) {
+      return Promise.reject(new Error("ZIP library was not loaded"));
+    }
+
+    return new Promise((resolve, reject) => {
+      const chunks = [];
+      const failures = [];
+      let settled = false;
+      const finishWithError = error => {
+        if (settled) return;
+        settled = true;
+        reject(error);
+      };
+      const zip = new fflate.Zip((error, data, final) => {
+        if (error) {
+          finishWithError(error);
+          return;
+        }
+        if (data?.length) {
+          chunks.push(data.slice());
+        }
+        if (final && !settled) {
+          settled = true;
+          resolve({
+            blob: new Blob(chunks, { type: "application/zip" }),
+            failures
+          });
+        }
+      });
+
+      (async () => {
+        try {
+          const total = files.length + documents.length;
+          for (let index = 0; index < documents.length; index += 1) {
+            const document = documents[index];
+            const documentEntry = new fflate.ZipDeflate(
+              sanitizeDownloadRelativePath(document.name),
+              { level: 6 }
+            );
+            zip.add(documentEntry);
+            documentEntry.push(fflate.strToU8(document.content), true);
+            onProgress?.(index + 1, total);
+          }
+
+          for (let index = 0; index < files.length; index += 1) {
+            const file = files[index];
+            try {
+              const response = await fetchArchiveFile(file, conversationId);
+              await pushResponseToZip(zip, file.downloadPath || file.name, response);
+            } catch (error) {
+              console.error("chat-to-markdown: failed to add file to archive", file, error);
+              failures.push({
+                name: file.name,
+                path: file.relativePath || file.downloadPath || "",
+                sourcePath: file.sandboxPath || file.fileId || "",
+                error: error.message
+              });
+            }
+            onProgress?.(documents.length + index + 1, total);
+          }
+
+          if (failures.length) {
+            const documentNames = new Set(documents.map(document => document.name.toLocaleLowerCase()));
+            const errorFilename = documentNames.has("download-errors.json")
+              ? "_download-errors.json"
+              : "download-errors.json";
+            const errorEntry = new fflate.ZipDeflate(errorFilename, { level: 6 });
+            zip.add(errorEntry);
+            errorEntry.push(fflate.strToU8(`${JSON.stringify({
+              schemaVersion: 1,
+              message: "Some selected ChatGPT files could not be downloaded",
+              failures
+            }, null, 2)}\n`), true);
+          }
+
+          zip.end();
+        } catch (error) {
+          zip.terminate();
+          finishWithError(error);
+        }
+      })();
+    });
+  }
+
+  async function downloadConversation() {
+    if (conversationExportInProgress) {
+      return;
+    }
+
+    conversationExportInProgress = true;
+    const strings = getUiStrings();
+    let progressToast = null;
+
+    try {
+      progressToast = createProgressToast(strings.loading);
+
+      const conversationId = exportCore?.extractConversationId(
+        location.href,
+        getCanonicalConversationUrl()
+      );
+      let conversation = null;
+      let markdown;
+      let files;
+      let title = getConversationTitle();
+
+      if (conversationId) {
+        if (!exportCore) {
+          throw new Error("ChatGPT export helpers were not loaded");
+        }
+
+        conversation = await fetchFullConversation(conversationId, messageCount => {
+          progressToast?.update(
+            strings.loadedMessages.replace("{count}", String(messageCount))
+          );
+        });
+        title = exportCore.getConversationTitle(conversation, title);
+        markdown = exportCore.buildConversationMarkdown(conversation, title);
+        files = mergeConversationFiles(
+          exportCore.collectConversationFiles(conversation),
+          collectDomFiles()
+        );
+      } else {
+        markdown = buildDomConversationMarkdown();
+        files = collectDomFiles();
+      }
+
+      console.info("[chat-to-markdown] detected conversation files", files.map(file => ({
+        name: file.name,
+        direction: file.direction,
+        type: file.type,
+        source: file.source || "unknown",
+        messageId: file.messageId || ""
+      })));
+
+      progressToast.remove();
+      progressToast = null;
+
+      const safeTitle = sanitizeFilenameSegment(title) || "Conversation with ChatGPT";
+      const markdownFilename = `${safeTitle}.md`;
+      const jsonFilename = `${safeTitle}.json`;
+      const selectedFiles = files.length
+        ? await showDownloadPicker(files, markdownFilename, jsonFilename)
+        : [];
+
+      if (selectedFiles === null) {
+        return;
+      }
+
+      const preparedFiles = prepareSelectedFilePaths(selectedFiles);
+      const linkedMarkdown = addRelativeFileLinks(markdown, preparedFiles);
+      const jsonData = conversation
+        ? exportCore.buildConversationJsonData(conversation, title, preparedFiles, location.href)
+        : buildDomConversationJsonData(title, preparedFiles);
+      const conversationJson = stringifyConversationJson(jsonData, preparedFiles);
+      const documents = [
+        { name: markdownFilename, content: linkedMarkdown },
+        { name: jsonFilename, content: conversationJson }
+      ];
+      const packageFileCount = preparedFiles.length + documents.length;
+      const hasPageFallbackFiles = preparedFiles.some(file => file.type === "dom");
+
+      if (packageFileCount > 2 && !hasPageFallbackFiles) {
+        progressToast = createProgressToast(
+          formatArchiveProgress(strings, 0, packageFileCount),
+          0,
+          packageFileCount
+        );
+
+        try {
+          const archiveResult = await createExportArchive(
+            documents,
+            preparedFiles,
+            conversationId,
+            (current, total) => {
+              progressToast?.update(
+                formatArchiveProgress(strings, current, total),
+                current,
+                total
+              );
+            }
+          );
+          downloadBlob(`${safeTitle}.zip`, archiveResult.blob);
+          progressToast.remove();
+          progressToast = null;
+          if (archiveResult.failures.length) {
+            const visibleFailures = archiveResult.failures.slice(0, 3).map(item => item.name);
+            const remainingCount = archiveResult.failures.length - visibleFailures.length;
+            const suffix = remainingCount > 0 ? ` (+${remainingCount})` : "";
+            showToast(`${strings.archivePartial}: ${visibleFailures.join(", ")}${suffix}`, true);
+          } else {
+            showToast(strings.archiveStarted);
+          }
+        } catch (error) {
+          progressToast?.remove();
+          progressToast = null;
+          console.error("chat-to-markdown: failed to create export archive", error);
+          showToast(`${strings.archiveFailed}: ${error.message}`, true);
+        }
+      } else {
+        downloadAsMarkdown(markdownFilename, linkedMarkdown);
+        downloadAsJson(jsonFilename, conversationJson);
+        progressToast = createProgressToast(
+          formatDownloadProgress(strings, documents.length, packageFileCount),
+          documents.length,
+          packageFileCount
+        );
+        const failures = await downloadSelectedFiles(
+          preparedFiles,
+          conversationId,
+          completed => {
+            const current = completed + documents.length;
+            progressToast?.update(
+              formatDownloadProgress(strings, current, packageFileCount),
+              current,
+              packageFileCount
+            );
+          }
+        );
+        progressToast.remove();
+        progressToast = null;
+
+        if (failures.length) {
+          const names = failures.map(item => item.file.name).join(", ");
+          showToast(`${strings.failedFiles}: ${names}`, true);
+        } else if (hasPageFallbackFiles) {
+          showToast(strings.fallbackNotice);
+        } else {
+          showToast(strings.started);
+        }
+      }
+    } catch (error) {
+      console.error("chat-to-markdown: failed to export conversation", error);
+      showToast(`${strings.fullChatError}: ${error.message}`, true);
+      throw error;
+    } finally {
+      progressToast?.remove();
+      conversationExportInProgress = false;
+    }
   }
 
   function detectLanguage() {
     const htmlLang = document.documentElement.lang;
-    if (htmlLang && htmlLang.startsWith('ru')) {
+    if (htmlLang && /^uk(-|$)/i.test(htmlLang)) {
+      return 'uk';
+    }
+    if (htmlLang && /^(ru|be)(-|$)/i.test(htmlLang)) {
       return 'ru';
     }
 
     const sampleButton = document.querySelector('button[aria-label]');
     if (sampleButton) {
       const label = sampleButton.getAttribute('aria-label');
-      if (label && /[а-яА-Я]/.test(label)) {
+      if (label && /[іІїЇєЄґҐ]/.test(label)) {
+        return 'uk';
+      }
+      if (label && /[а-яА-ЯёЁ]/.test(label)) {
         return 'ru';
       }
     }
@@ -702,8 +2048,12 @@
     }
 
     const lang = detectLanguage();
-    const tooltipText = lang === 'ru' ? 'Скачать весь чат' : 'Download chat';
-    const ariaLabel = lang === 'ru' ? 'Скачать весь чат' : 'Download chat';
+    const tooltipText = lang === 'uk'
+      ? 'Завантажити чат і файли'
+      : lang === 'ru'
+        ? 'Скачать чат и файлы'
+        : 'Download chat and files';
+    const ariaLabel = tooltipText;
 
     const button = document.createElement("button");
     button.type = "button";
@@ -727,11 +2077,9 @@
     button.addEventListener("click", event => {
       event.stopPropagation();
       event.preventDefault();
-      try {
-        downloadConversation();
-      } catch (error) {
+      downloadConversation().catch(error => {
         console.error("chat-to-markdown: failed to export conversation", error);
-      }
+      });
     });
 
     if (voiceButtonContainer) {
@@ -802,7 +2150,27 @@
     window.__chatgptDownloaderObserver = observer;
   }
 
+  function ensureContentStyles() {
+    try {
+      chrome.runtime.sendMessage(
+        { type: "chat-to-markdown:ensure-styles" },
+        response => {
+          const error = chrome.runtime.lastError;
+          if (error || !response?.success) {
+            console.warn(
+              "[chat-to-markdown] Failed to re-inject content styles",
+              error?.message || response?.error || "unknown error"
+            );
+          }
+        }
+      );
+    } catch (error) {
+      console.warn("[chat-to-markdown] Failed to request content styles", error);
+    }
+  }
+
   function init() {
+    ensureContentStyles();
     enhancePage();
     observeMessages();
   }
@@ -815,13 +2183,12 @@
 
       if (message.type === "chatgpt-downloader:download-conversation") {
         console.info("[chat-to-markdown] Received request to download conversation");
-        try {
-          downloadConversation();
-          sendResponse({ success: true });
-        } catch (error) {
-          console.error("chat-to-markdown: failed to export conversation", error);
-          sendResponse({ success: false, error: error.message });
-        }
+        downloadConversation()
+          .then(() => sendResponse({ success: true }))
+          .catch(error => {
+            console.error("chat-to-markdown: failed to export conversation", error);
+            sendResponse({ success: false, error: error.message });
+          });
         return true;
       }
       return false;

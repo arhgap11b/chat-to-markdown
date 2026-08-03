@@ -19,17 +19,25 @@
 
 | Platform | Status | Notes |
 |----------|--------|-------|
-| ChatGPT (`chatgpt.com`) | ✅ | Inline buttons, Download All |
+| ChatGPT (`chatgpt.com`) | ✅ | Inline buttons, complete chat + file picker |
 | Google Gemini (`gemini.google.com`) | ✅ | Native Material Design buttons |
 
 ## Features
 
 - **Inline download buttons** next to every message — matches native Copy button style on each platform
+- **Complete long-chat export** — reads the full active conversation branch even when ChatGPT virtualizes older messages
+- **Selectable file downloads** — choose any input attachments and generated output documents to download with the Markdown context
+- **Role-aware file discovery** — recognizes uploaded and generated files from attachments, nested references, citations, artifacts, `file-service://`, `sediment://`, sandbox paths, signed URLs, and current ChatGPT file buttons
+- **Correctable direction** — every picker row can be switched between input and output before download
+- **Portable Markdown + JSON export** — both context documents stay at the export root and record ordered authorship plus relative links to selected files
+- **Clean attachment folders** — selected files are stored directly under `input/` and `output/` without an extra wrapper folder
+- **Automatic ZIP packaging** — when the export contains more than two files in total, one archive preserves the complete relative folder layout
+- **Live export progress** — animated loading state for full-chat retrieval and a determinate progress bar for file downloads and ZIP creation
 - **"Download All" button** in the input area for full conversation export
 - **Research mode** — `Ctrl/Cmd + Click` for incremental naming (`analysis_1_Title.md`, `analysis_2_Title.md`)
 - **Smart file naming** — files named after conversation title, author-aware prefixes
 - **Unicode support** — Cyrillic, Chinese, Arabic and other non-Latin characters preserved
-- **Language-aware UI** — tooltips adapt to English/Russian interface
+- **Language-aware UI** — dialogs, progress messages, and tooltips adapt to English, Russian, and Ukrainian interfaces
 - **Cross-tab sync** — research counter shared via localStorage across all tabs
 - **Markdown conversion** — Turndown + GFM for clean, readable output
 
@@ -58,22 +66,27 @@ Keep the `src` folder in place — moving it breaks the extension.
 ```
 src/
 ├── manifest.json              # Extension config (ChatGPT + Gemini entries)
+├── chatgpt-export.js          # Full-conversation and attachment parsing
 ├── content.js                 # ChatGPT content script
 ├── content.css                # ChatGPT styles
 ├── content-gemini.js          # Gemini content script
 ├── content-gemini.css         # Gemini styles
-├── background.js              # Service worker
+├── background.js              # Service worker for file downloads
 ├── assets/icon.png            # Extension icon
 └── vendor/
     ├── turndown.js            # HTML → Markdown
-    └── turndown-plugin-gfm.js # GFM tables, strikethrough
+    ├── turndown-plugin-gfm.js # GFM tables, strikethrough
+    ├── fflate.js              # Streaming ZIP creation
+    └── fflate.LICENSE.txt     # fflate MIT license
 ```
 
-Each platform has its own content script — DOM structures are completely different, so mixing them would be fragile. Vendor libs (Turndown + GFM) are shared.
+Each platform has its own content script — DOM structures are completely different, so mixing them would be fragile. Turndown + GFM are shared; fflate is loaded only for ChatGPT exports.
 
 ## Credits
 
 Based on [ChatGPT-History-Downloader](https://github.com/Luo-Yihang/ChatGPT-History-Downloader) by Luo-Yihang.
+
+ZIP creation uses [fflate](https://github.com/101arrowz/fflate), distributed under the MIT license.
 
 ## License
 

@@ -1,0 +1,813 @@
+(function (root, factory) {
+  const api = factory();
+
+  if (typeof module !== "undefined" && module.exports) {
+    module.exports = api;
+  }
+
+  root.ChatToMarkdownExport = api;
+})(typeof globalThis !== "undefined" ? globalThis : this, function () {
+  "use strict";
+
+  const FILE_POINTER_PREFIX_PATTERN = /^(?:file-service|sediment):\/\//i;
+  const FILE_POINTER_PATTERN = /(?:file-service|sediment):\/\/([^\s"'<>\]\[{}]+)/gi;
+  const SANDBOX_PREFIX = "sandbox:";
+  const RAW_SANDBOX_PATTERN = /sandbox:(\/mnt\/data\/[^\s"'<>\]\[{}]+)/gi;
+  const DIRECT_FILE_URL_PATTERN = /^(?:blob:|https?:\/\/[^/]*oaiusercontent\.com\/|https?:\/\/[^/]+\/backend-api\/(?:files|estuary|conversation)\/)/i;
+
+  function extractConversationId(url, canonicalUrl) {
+    for (const candidate of [url, canonicalUrl]) {
+      if (!candidate || typeof candidate !== "string") {
+        continue;
+      }
+
+      const match = candidate.match(/\/c\/([0-9a-f]{8}-[0-9a-f-]{27,})/i);
+      if (match) {
+        return match[1];
+      }
+    }
+
+    return null;
+  }
+
+  function stripFileServicePrefix(value) {
+    if (typeof value !== "string") {
+      return "";
+    }
+    return value.replace(FILE_POINTER_PREFIX_PATTERN, "");
+  }
+
+  function getMessageNodes(conversation) {
+    const mapping = conversation && conversation.mapping;
+    if (!mapping || typeof mapping !== "object") {
+      const messages = Array.isArray(conversation && conversation.messages)
+        ? conversation.messages
+        : [];
+      return messages.map(message => ({ id: message && message.id, message }));
+    }
+
+    const nodes = [];
+    const visited = new Set();
+    let nodeId = conversation.current_node;
+
+    while (nodeId && mapping[nodeId] && !visited.has(nodeId)) {
+      visited.add(nodeId);
+      const node = mapping[nodeId];
+      nodes.push(node);
+      nodeId = node.parent;
+    }
+
+    if (nodes.length) {
+      return nodes.reverse();
+    }
+
+    return Object.values(mapping)
+      .filter(node => node && node.message)
+      .sort((left, right) => {
+        const leftTime = Number(left.message && left.message.create_time) || 0;
+        const rightTime = Number(right.message && right.message.create_time) || 0;
+        return leftTime - rightTime;
+      });
+  }
+
+  function getActiveMessages(conversation) {
+    return getMessageNodes(conversation)
+      .map(node => node && node.message)
+      .filter(Boolean);
+  }
+
+  function isVisibleConversationMessage(message) {
+    if (!message || message.metadata?.is_visually_hidden_from_conversation) {
+      return false;
+    }
+
+    const role = message.author && message.author.role;
+    if (role === "user") {
+      return true;
+    }
+
+    if (role !== "assistant") {
+      return false;
+    }
+
+    return !message.recipient || message.recipient === "all";
+  }
+
+  function getAttachmentMap(message) {
+    const result = new Map();
+    const attachments = message && message.metadata && message.metadata.attachments;
+
+    if (!Array.isArray(attachments)) {
+      return result;
+    }
+
+    for (const attachment of attachments) {
+      const id = stripFileServicePrefix(attachment && (attachment.id || attachment.file_id));
+      if (id) {
+        result.set(id, attachment);
+      }
+    }
+
+    return result;
+  }
+
+  function cleanInternalMarkers(text) {
+    return String(text || "")
+      .replace(/\uE200(?:cite|filecite|turn\d+\w*)?\uE202[^\uE201]*\uE201/g, "")
+      .replace(/\uE200[^\uE201]*\uE201/g, "")
+      .replace(/\r\n/g, "\n")
+      .trim();
+  }
+
+  function partToMarkdown(part, attachmentMap, imageIndex) {
+    if (typeof part === "string") {
+      return cleanInternalMarkers(part);
+    }
+
+    if (!part || typeof part !== "object") {
+      return "";
+    }
+
+    if (typeof part.text === "string") {
+      return cleanInternalMarkers(part.text);
+    }
+
+    const pointer = stripFileServicePrefix(
+      part.asset_pointer || part.file_id || part.id || ""
+    );
+    const attachment = pointer ? attachmentMap.get(pointer) : null;
+    const contentType = String(part.content_type || "");
+
+    if (contentType.includes("image") || part.asset_pointer) {
+      const name = attachment?.name || part.name || `Image ${imageIndex}`;
+      return `[Image: ${name}]`;
+    }
+
+    if (contentType.includes("audio")) {
+      const name = attachment?.name || part.name || `Audio ${imageIndex}`;
+      return `[Audio: ${name}]`;
+    }
+
+    return "";
+  }
+
+  function messageToMarkdown(message) {
+    const content = message && message.content;
+    if (!content) {
+      return "";
+    }
+
+    const attachmentMap = getAttachmentMap(message);
+    const parts = Array.isArray(content.parts)
+      ? content.parts
+      : typeof content.text === "string"
+        ? [content.text]
+        : [];
+
+    const converted = parts
+      .map((part, index) => partToMarkdown(part, attachmentMap, index + 1))
+      .filter(Boolean);
+
+    const referencedFileIds = new Set(
+      parts
+        .filter(part => part && typeof part === "object")
+        .map(part => stripFileServicePrefix(part.asset_pointer || part.file_id || part.id || ""))
+        .filter(Boolean)
+    );
+    const attachmentLabels = Array.from(attachmentMap.entries())
+      .filter(([fileId]) => !referencedFileIds.has(fileId))
+      .map(([, attachment]) => `[Attachment: ${attachment.name || attachment.file_name || "file"}]`);
+
+    converted.unshift(...attachmentLabels);
+
+    if (!converted.length && typeof content.result === "string") {
+      converted.push(cleanInternalMarkers(content.result));
+    }
+
+    return converted.join("\n\n").trim();
+  }
+
+  function getConversationTitle(conversation, fallbackTitle) {
+    const title = conversation && typeof conversation.title === "string"
+      ? conversation.title.trim()
+      : "";
+    return title || String(fallbackTitle || "Conversation with ChatGPT").trim();
+  }
+
+  function buildConversationMarkdown(conversation, fallbackTitle) {
+    const parts = [];
+
+    for (const message of getActiveMessages(conversation)) {
+      if (!isVisibleConversationMessage(message)) {
+        continue;
+      }
+
+      const markdown = messageToMarkdown(message);
+      if (!markdown) {
+        continue;
+      }
+
+      const author = message.author?.role === "user" ? "User" : "ChatGPT";
+      parts.push(`**${author}**:\n\n${markdown}`);
+    }
+
+    if (!parts.length) {
+      throw new Error("Unable to find any conversation content to download");
+    }
+
+    const title = getConversationTitle(conversation, fallbackTitle).replace(/[\r\n]+/g, " ");
+    return `# ${title}\n\n${parts.join("\n\n---\n\n")}`.trim();
+  }
+
+  function toIsoTimestamp(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric <= 0) {
+      return null;
+    }
+
+    const milliseconds = numeric < 1_000_000_000_000 ? numeric * 1000 : numeric;
+    const date = new Date(milliseconds);
+    return Number.isNaN(date.getTime()) ? null : date.toISOString();
+  }
+
+  function serializeExportFile(file) {
+    return {
+      name: String(file?.localName || file?.name || "file"),
+      direction: file?.direction === "input" ? "input" : "output",
+      path: String(file?.relativePath || ""),
+      link: String(file?.relativeUrl || ""),
+      messageId: String(file?.messageId || ""),
+      mimeType: String(file?.mimeType || ""),
+      size: Number(file?.size) || 0,
+      source: String(file?.source || file?.type || "unknown")
+    };
+  }
+
+  function buildConversationJsonData(conversation, fallbackTitle, files = [], sourceUrl = "") {
+    const exportedFiles = files.map(serializeExportFile);
+    const filesByMessage = new Map();
+
+    exportedFiles.forEach(file => {
+      if (!file.messageId) return;
+      const messageFiles = filesByMessage.get(file.messageId) || [];
+      messageFiles.push(file);
+      filesByMessage.set(file.messageId, messageFiles);
+    });
+
+    const messages = [];
+    for (const node of getMessageNodes(conversation)) {
+      const message = node?.message;
+      if (!isVisibleConversationMessage(message)) {
+        continue;
+      }
+
+      const contentMarkdown = messageToMarkdown(message);
+      if (!contentMarkdown) {
+        continue;
+      }
+
+      const role = String(message.author?.role || "unknown");
+      messages.push({
+        position: messages.length + 1,
+        id: String(message.id || node.id || ""),
+        parentId: String(node.parent || message.parent_id || message.parentId || ""),
+        author: {
+          role,
+          label: role === "user" ? "User" : role === "assistant" ? "ChatGPT" : role,
+          name: String(message.author?.name || "")
+        },
+        createdAt: toIsoTimestamp(message.create_time),
+        updatedAt: toIsoTimestamp(message.update_time),
+        recipient: String(message.recipient || "all"),
+        contentType: String(message.content?.content_type || "text"),
+        contentMarkdown,
+        files: filesByMessage.get(String(message.id || node.id || "")) || []
+      });
+    }
+
+    return {
+      schemaVersion: 1,
+      conversation: {
+        id: String(conversation?.id || conversation?.conversation_id || ""),
+        title: getConversationTitle(conversation, fallbackTitle),
+        currentNode: String(conversation?.current_node || ""),
+        sourceUrl: String(sourceUrl || ""),
+        exportedAt: new Date().toISOString()
+      },
+      messages,
+      files: exportedFiles
+    };
+  }
+
+  function filenameFromPath(path, fallback) {
+    const cleanPath = String(path || "").split(/[?#]/, 1)[0];
+    const lastSegment = cleanPath.split("/").filter(Boolean).pop();
+
+    if (!lastSegment) {
+      return fallback;
+    }
+
+    try {
+      return decodeURIComponent(lastSegment);
+    } catch {
+      return lastSegment;
+    }
+  }
+
+  function getMessageDirection(message) {
+    const role = message?.author?.role;
+    if (role === "user") return "input";
+    if (role === "assistant" || role === "tool") return "output";
+    return null;
+  }
+
+  function firstString(object, keys) {
+    for (const key of keys) {
+      if (typeof object?.[key] === "string" && object[key].trim()) {
+        return object[key].trim();
+      }
+    }
+    return "";
+  }
+
+  function decodeFileName(value) {
+    const name = String(value || "").trim();
+    if (!name) return "";
+    try {
+      return decodeURIComponent(name);
+    } catch {
+      return name;
+    }
+  }
+
+  function extensionFromMimeType(mimeType) {
+    const normalized = String(mimeType || "").split(";", 1)[0].toLowerCase();
+    const known = {
+      "application/pdf": ".pdf",
+      "application/json": ".json",
+      "application/zip": ".zip",
+      "application/gzip": ".gz",
+      "application/x-tar": ".tar",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+      "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+      "text/csv": ".csv",
+      "text/markdown": ".md",
+      "text/plain": ".txt",
+      "image/jpeg": ".jpg",
+      "image/png": ".png",
+      "image/webp": ".webp",
+      "image/gif": ".gif",
+      "image/svg+xml": ".svg",
+      "audio/mpeg": ".mp3",
+      "audio/wav": ".wav",
+      "video/mp4": ".mp4"
+    };
+    return known[normalized] || "";
+  }
+
+  function candidateName(object, fallback) {
+    const rawName = firstString(object, [
+      "file_name",
+      "filename",
+      "name",
+      "display_name",
+      "displayName",
+      "title"
+    ]);
+    if (rawName) return decodeFileName(rawName);
+
+    const url = firstString(object, ["download_url", "downloadUrl", "url", "href"]);
+    if (url) {
+      try {
+        const parsed = new URL(url, "https://chatgpt.com");
+        const fromQuery = parsed.searchParams.get("filename") || parsed.searchParams.get("file_name");
+        if (fromQuery) return decodeFileName(fromQuery);
+        const fromPath = filenameFromPath(parsed.pathname, "");
+        if (fromPath && !/^file[-_][a-z0-9]+$/i.test(fromPath)) return fromPath;
+      } catch {
+        // Keep the fallback below.
+      }
+    }
+
+    const mimeType = firstString(object, ["mime_type", "mimeType", "content_type", "contentType"]);
+    return `${fallback}${extensionFromMimeType(mimeType)}`;
+  }
+
+  function fileIdFromValue(value) {
+    if (typeof value !== "string") return "";
+    const trimmed = value.trim();
+    if (!trimmed) return "";
+    if (FILE_POINTER_PREFIX_PATTERN.test(trimmed)) {
+      return stripFileServicePrefix(trimmed);
+    }
+    return /^file[-_][a-z0-9][a-z0-9._#*-]*$/i.test(trimmed) ? trimmed : "";
+  }
+
+  function cleanSandboxPath(value) {
+    let path = String(value || "").trim();
+    if (path.startsWith(SANDBOX_PREFIX)) {
+      path = path.slice(SANDBOX_PREFIX.length);
+    }
+    if (!path.startsWith("/mnt/data/")) return "";
+
+    path = path.replace(/[.,;:!?]+$/g, "");
+    while (path.endsWith(")")) {
+      const openCount = (path.match(/\(/g) || []).length;
+      const closeCount = (path.match(/\)/g) || []).length;
+      if (closeCount <= openCount) break;
+      path = path.slice(0, -1);
+    }
+    return path;
+  }
+
+  function directionForContext(messageDirection, path, kind) {
+    if (kind === "sandbox") return "output";
+    const context = path.join(".").toLowerCase();
+    if (/citations?|file_search|uploaded_sources?/.test(context)) return "input";
+    if (/dragonfruit|generated|downloads?|outputs?|artifacts?/.test(context)) return "output";
+    return messageDirection;
+  }
+
+  function walkNestedValues(value, visitor, path = [], seen = new Set()) {
+    if (value == null) return;
+    if (typeof value === "string") {
+      visitor(value, path, null);
+      return;
+    }
+    if (typeof value !== "object" || seen.has(value)) return;
+    seen.add(value);
+    visitor(value, path, value);
+
+    if (Array.isArray(value)) {
+      value.forEach((item, index) => walkNestedValues(item, visitor, [...path, String(index)], seen));
+      return;
+    }
+    Object.entries(value).forEach(([key, item]) => {
+      walkNestedValues(item, visitor, [...path, key], seen);
+    });
+  }
+
+  function collectNestedMessageFiles(message, messageDirection, addFile) {
+    let genericIndex = 0;
+
+    walkNestedValues(message, (value, path, object) => {
+      if (typeof value === "string") {
+        for (const match of value.matchAll(FILE_POINTER_PATTERN)) {
+          const fileId = fileIdFromValue(match[0]);
+          if (!fileId) continue;
+          genericIndex += 1;
+          const direction = directionForContext(messageDirection, path, "file");
+          if (!direction) continue;
+          addFile({
+            key: `file:${fileId}`,
+            type: "file",
+            fileId,
+            name: `${direction}_file_${genericIndex}`,
+            mimeType: "",
+            size: 0,
+            direction,
+            messageId: message.id || "",
+            priority: 30,
+            source: "nested_pointer"
+          });
+        }
+
+        for (const match of value.matchAll(RAW_SANDBOX_PATTERN)) {
+          const sandboxPath = cleanSandboxPath(match[1]);
+          if (!sandboxPath) continue;
+          addFile({
+            key: `sandbox:${message.id || "unknown"}:${sandboxPath}`,
+            type: "sandbox",
+            sandboxPath,
+            name: filenameFromPath(sandboxPath, `output_file_${genericIndex + 1}`),
+            mimeType: "",
+            size: 0,
+            direction: "output",
+            messageId: message.id || "",
+            priority: 110,
+            source: "sandbox_text"
+          });
+        }
+        return;
+      }
+
+      if (!object || Array.isArray(object)) return;
+      const context = path.join(".").toLowerCase();
+      const mimeType = firstString(object, ["mime_type", "mimeType"]);
+      const size = Number(object.size || object.size_bytes || object.file_size || object.byte_size) || 0;
+      const pointer = firstString(object, ["asset_pointer", "assetPointer", "file_pointer", "filePointer"]);
+      const explicitFileId = firstString(object, ["file_id", "fileId"]);
+      const contextualId = /file|attachment|asset|citation|download|artifact|image|audio|video/.test(context)
+        ? firstString(object, ["id"])
+        : "";
+      const fileId = fileIdFromValue(pointer || explicitFileId || contextualId);
+      const rawSandboxPath = firstString(object, ["sandbox_path", "sandboxPath", "filepath", "file_path"]);
+      const sandboxPath = cleanSandboxPath(rawSandboxPath);
+      const directUrl = firstString(object, ["download_url", "downloadUrl", "url", "href"]);
+      const isFileContext = Boolean(
+        fileId
+        && (
+          pointer
+          || explicitFileId
+          || mimeType
+          || /file|attachment|asset|citation|download|artifact|image|audio|video/.test(context)
+        )
+      );
+
+      if (sandboxPath) {
+        addFile({
+          key: `sandbox:${message.id || "unknown"}:${sandboxPath}`,
+          type: "sandbox",
+          sandboxPath,
+          name: candidateName(object, filenameFromPath(sandboxPath, `output_file_${genericIndex + 1}`)),
+          mimeType,
+          size,
+          direction: "output",
+          messageId: message.id || "",
+          priority: 115,
+          source: "nested_sandbox"
+        });
+      } else if (isFileContext) {
+        genericIndex += 1;
+        const direction = directionForContext(messageDirection, path, "file");
+        if (!direction) return;
+        addFile({
+          key: `file:${fileId}`,
+          type: "file",
+          fileId,
+          name: candidateName(object, `${direction}_file_${genericIndex}`),
+          mimeType,
+          size,
+          direction,
+          messageId: message.id || "",
+          directUrl: DIRECT_FILE_URL_PATTERN.test(directUrl) ? directUrl : "",
+          priority: /citations?/.test(context) ? 85 : 60,
+          source: "nested_file"
+        });
+      } else if (DIRECT_FILE_URL_PATTERN.test(directUrl)) {
+        genericIndex += 1;
+        const direction = directionForContext(messageDirection, path, "direct");
+        if (!direction) return;
+        addFile({
+          key: `direct:${directUrl}`,
+          type: "direct",
+          url: directUrl,
+          name: candidateName(object, `${direction}_file_${genericIndex}`),
+          mimeType,
+          size,
+          direction,
+          messageId: message.id || "",
+          priority: 50,
+          source: "nested_url"
+        });
+      }
+    });
+  }
+
+  function collectConversationFiles(conversation) {
+    const files = new Map();
+    const messages = getActiveMessages(conversation);
+
+    function addFile(file) {
+      if (!file || !file.key || !file.name) {
+        return;
+      }
+
+      const existing = files.get(file.key);
+      if (!existing) {
+        files.set(file.key, file);
+        return;
+      }
+
+      const existingPriority = Number(existing.priority) || 0;
+      const incomingPriority = Number(file.priority) || 0;
+      if (incomingPriority > existingPriority) {
+        files.set(file.key, {
+          ...existing,
+          ...file,
+          directUrl: file.directUrl || existing.directUrl || ""
+        });
+        return;
+      }
+
+      if (!existing.directUrl && file.directUrl) existing.directUrl = file.directUrl;
+      if (!existing.mimeType && file.mimeType) existing.mimeType = file.mimeType;
+      if (!existing.size && file.size) existing.size = file.size;
+      if (/^(?:input|output)_file_\d+(?:\.[a-z0-9]+)?$/i.test(existing.name)
+          && !/^(?:input|output)_file_\d+(?:\.[a-z0-9]+)?$/i.test(file.name)) {
+        existing.name = file.name;
+      }
+    }
+
+    for (const message of messages) {
+      if (!message) {
+        continue;
+      }
+
+      const direction = getMessageDirection(message);
+      if (!direction) {
+        continue;
+      }
+      const metadata = message.metadata || {};
+      const attachments = Array.isArray(metadata.attachments)
+        ? metadata.attachments
+        : [];
+
+      for (const attachment of attachments) {
+        const fileId = fileIdFromValue(
+          attachment?.id || attachment?.file_id || attachment?.asset_pointer || ""
+        );
+        if (!fileId) {
+          continue;
+        }
+        const name = candidateName(attachment, `${direction}_file_${files.size + 1}`);
+
+        addFile({
+          key: `file:${fileId}`,
+          type: "file",
+          fileId,
+          name,
+          mimeType: attachment.mime_type || attachment.mimeType || "",
+          size: Number(attachment.size || attachment.size_bytes) || 0,
+          direction,
+          messageId: message.id || "",
+          priority: message.author?.role === "user" ? 130 : 105,
+          source: "attachment"
+        });
+      }
+
+      const contentParts = Array.isArray(message.content?.parts)
+        ? message.content.parts
+        : [];
+
+      for (const part of contentParts) {
+        if (!part || typeof part !== "object") {
+          continue;
+        }
+
+        const fileId = fileIdFromValue(part.asset_pointer || part.file_id || "");
+        if (!fileId) {
+          continue;
+        }
+
+        const attachment = attachments.find(item =>
+          stripFileServicePrefix(item?.id || item?.file_id || "") === fileId
+        );
+        const extension = String(part.content_type || "").includes("image") ? ".png" : "";
+        const name = attachment?.name || part.name || `${direction}_file_${files.size + 1}${extension}`;
+
+        addFile({
+          key: `file:${fileId}`,
+          type: "file",
+          fileId,
+          name,
+          mimeType: attachment?.mime_type || "",
+          size: Number(attachment?.size || part.size_bytes) || 0,
+          direction,
+          messageId: message.id || "",
+          priority: message.author?.role === "user" ? 125 : 100,
+          source: "content_part"
+        });
+      }
+
+      const contentReferences = Array.isArray(metadata.content_references)
+        ? metadata.content_references
+        : [];
+
+      for (const reference of contentReferences) {
+        if (!reference || typeof reference !== "object") {
+          continue;
+        }
+
+        const rawPath = reference.filepath || reference.file_path || reference.sandbox_path || "";
+        const sandboxPath = rawPath.startsWith(SANDBOX_PREFIX)
+          ? rawPath.slice(SANDBOX_PREFIX.length)
+          : rawPath.startsWith("/mnt/")
+            ? rawPath
+            : "";
+        const name = reference.file_name || reference.name || filenameFromPath(sandboxPath, "");
+
+        if (sandboxPath && name) {
+          addFile({
+            key: `sandbox:${message.id || "unknown"}:${sandboxPath}`,
+            type: "sandbox",
+            sandboxPath,
+            name,
+            mimeType: reference.mime_type || "",
+            size: Number(reference.size || reference.size_bytes) || 0,
+            direction: "output",
+            messageId: message.id || "",
+            priority: 135,
+            source: "content_reference_sandbox"
+          });
+          continue;
+        }
+
+        const fileId = fileIdFromValue(reference.file_id || reference.id || reference.asset_pointer || "");
+        if (fileId && name) {
+          addFile({
+            key: `file:${fileId}`,
+            type: "file",
+            fileId,
+            name,
+            mimeType: reference.mime_type || "",
+            size: Number(reference.size || reference.size_bytes) || 0,
+            direction,
+            messageId: message.id || "",
+            priority: 100,
+            source: "content_reference"
+          });
+        }
+      }
+
+      const citations = Array.isArray(metadata.citations) ? metadata.citations : [];
+      for (const citation of citations) {
+        const details = citation?.metadata && typeof citation.metadata === "object"
+          ? { ...citation, ...citation.metadata }
+          : citation;
+        const fileId = fileIdFromValue(details?.file_id || details?.id || details?.asset_pointer || "");
+        if (!fileId) continue;
+        addFile({
+          key: `file:${fileId}`,
+          type: "file",
+          fileId,
+          name: candidateName(details, `input_file_${files.size + 1}`),
+          mimeType: details.mime_type || details.mimeType || "",
+          size: Number(details.size || details.size_bytes) || 0,
+          direction: "input",
+          messageId: message.id || "",
+          priority: 110,
+          source: "citation"
+        });
+      }
+
+      const generatedDownloads = Array.isArray(metadata.kaur1br5_dragonfruit_downloads)
+        ? metadata.kaur1br5_dragonfruit_downloads
+        : [];
+
+      for (const download of generatedDownloads) {
+        const fileId = fileIdFromValue(download?.id || download?.file_id || download?.asset_pointer || "");
+        if (!fileId) {
+          continue;
+        }
+        const name = candidateName(download, `output_file_${files.size + 1}`);
+
+        addFile({
+          key: `file:${fileId}`,
+          type: "file",
+          fileId,
+          name,
+          mimeType: download.mime_type || "",
+          size: Number(download.size || download.size_bytes) || 0,
+          direction: "output",
+          messageId: message.id || "",
+          priority: 145,
+          source: "generated_download"
+        });
+      }
+
+      collectNestedMessageFiles(message, direction, addFile);
+    }
+
+    const collectedFiles = Array.from(files.values());
+    const completeSandboxPaths = new Set(
+      collectedFiles
+        .filter(file => file.type === "sandbox" && file.sandboxPath)
+        .map(file => `${file.messageId || ""}\n${file.sandboxPath}`)
+    );
+
+    return collectedFiles.filter(file => {
+      if (file.type !== "sandbox" || !file.sandboxPath) {
+        return true;
+      }
+
+      const openCount = (file.sandboxPath.match(/\(/g) || []).length;
+      const closeCount = (file.sandboxPath.match(/\)/g) || []).length;
+      if (openCount <= closeCount) {
+        return true;
+      }
+
+      const prefix = `${file.messageId || ""}\n${file.sandboxPath}`;
+      return !Array.from(completeSandboxPaths).some(candidate =>
+        candidate !== prefix && candidate.startsWith(prefix)
+      );
+    }).map(file => {
+      const { priority, ...result } = file;
+      return result;
+    });
+  }
+
+  return {
+    buildConversationMarkdown,
+    buildConversationJsonData,
+    collectConversationFiles,
+    extractConversationId,
+    filenameFromPath,
+    getActiveMessages,
+    getConversationTitle,
+    isVisibleConversationMessage,
+    messageToMarkdown,
+    stripFileServicePrefix
+  };
+});

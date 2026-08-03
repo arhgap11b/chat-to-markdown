@@ -1,6 +1,6 @@
 {
   "name": "chat-to-markdown",
-  "version": "0.32",
+  "version": "0.39",
   "manifest_version": 3,
   "background": {
     "service_worker": "background.js"
@@ -14,6 +14,8 @@
       "js": [
         "vendor/turndown.js",
         "vendor/turndown-plugin-gfm.js",
+        "vendor/fflate.js",
+        "chatgpt-export.js",
         "content.js"
       ],
       "run_at": "document_idle",
@@ -40,6 +42,10 @@
     "scripting",
     "activeTab",
     "downloads"
+  ],
+  "host_permissions": [
+    "https://chat.openai.com/*",
+    "https://chatgpt.com/*"
   ],
   "action": {
     "default_icon": "./assets/icon.png"
