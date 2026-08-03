@@ -119,6 +119,218 @@
       .trim();
   }
 
+  function removeFileMarkdownLinks(value) {
+    const text = String(value || "");
+    const pattern = /!?\[[^\]]*\]\(\s*<?(?:sandbox:|file-service:|sediment:)/gi;
+    let cursor = 0;
+    let output = "";
+    let match;
+
+    while ((match = pattern.exec(text))) {
+      output += text.slice(cursor, match.index);
+      let depth = 1;
+      let end = pattern.lastIndex;
+      for (; end < text.length; end += 1) {
+        if (text[end] === "(") depth += 1;
+        if (text[end] === ")") {
+          depth -= 1;
+          if (depth === 0) break;
+        }
+      }
+      if (depth !== 0) {
+        output += text.slice(match.index);
+        return output;
+      }
+      output += " ";
+      cursor = end + 1;
+      pattern.lastIndex = cursor;
+    }
+
+    return `${output}${text.slice(cursor)}`;
+  }
+
+  function plainTextForSummary(markdown) {
+    return removeFileMarkdownLinks(markdown)
+      .replace(/```[\s\S]*?```/g, " [code] ")
+      .replace(/`([^`]*)`/g, "$1")
+      .replace(/\[(?:Attachment|Image|Audio):[^\]]+\]/gi, " ")
+      .replace(/(?:sandbox:|file-service:|sediment:)\S+/gi, " ")
+      .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/^\s{0,3}#{1,6}\s+/gm, "")
+      .replace(/^\s*[-*+]\s+/gm, "")
+      .replace(/^\s*\d+[.)]\s+/gm, "")
+      .replace(/[>*_~|]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function clipSummary(value, maxLength) {
+    const text = String(value || "").trim();
+    if (text.length <= maxLength) return text;
+    const clipped = text.slice(0, Math.max(1, maxLength - 1)).replace(/\s+\S*$/, "").trim();
+    return `${clipped || text.slice(0, maxLength - 1)}…`;
+  }
+
+  function summarizeMessageText(markdown, role = "user") {
+    const text = plainTextForSummary(markdown);
+    if (!text) return "";
+    if (text.length <= 170) return text;
+
+    const sentences = (text.match(/[^.!?…]+(?:[.!?…]+|$)/g) || [text])
+      .map(sentence => sentence.trim())
+      .filter(Boolean);
+    if (role === "user") {
+      return clipSummary(sentences.slice(0, 2).join(" ") || text, 170);
+    }
+
+    const first = clipSummary(sentences[0] || text, 105);
+    const lastCandidate = sentences.at(-1) || "";
+    const last = lastCandidate && lastCandidate !== sentences[0]
+      ? clipSummary(lastCandidate, 70)
+      : "";
+    return last ? `${first} … ${last}` : clipSummary(text, 170);
+  }
+
+  function buildConversationMessageContexts(conversation, navigatorSummaries = []) {
+    const contexts = [];
+    let visiblePosition = 0;
+    let promptIndex = -1;
+    let currentPromptSummary = "";
+    let currentPromptNumber = 0;
+    let lastVisibleContext = null;
+
+    for (const message of getActiveMessages(conversation)) {
+      const role = String(message?.author?.role || "unknown");
+      const contentMarkdown = messageToMarkdown(message);
+      const selectable = isVisibleConversationMessage(message) && Boolean(contentMarkdown);
+
+      if (selectable && role === "user") {
+        promptIndex += 1;
+        visiblePosition += 1;
+        const nativeSummary = String(navigatorSummaries[promptIndex] || "").trim();
+        currentPromptSummary = nativeSummary || summarizeMessageText(contentMarkdown, "user");
+        currentPromptNumber = promptIndex + 1;
+        lastVisibleContext = {
+          id: String(message.id || ""),
+          role,
+          author: "User",
+          position: visiblePosition,
+          promptNumber: currentPromptNumber,
+          summary: currentPromptSummary,
+          promptSummary: currentPromptSummary,
+          contentMarkdown,
+          selectable: true
+        };
+        contexts.push(lastVisibleContext);
+        continue;
+      }
+
+      if (selectable && role === "assistant") {
+        visiblePosition += 1;
+        lastVisibleContext = {
+          id: String(message.id || ""),
+          role,
+          author: "ChatGPT",
+          position: visiblePosition,
+          promptNumber: currentPromptNumber,
+          summary: summarizeMessageText(contentMarkdown, "assistant"),
+          promptSummary: currentPromptSummary,
+          contentMarkdown,
+          selectable: true
+        };
+        contexts.push(lastVisibleContext);
+        continue;
+      }
+
+      if (message?.id && lastVisibleContext) {
+        const outputLike = role === "assistant" || role === "tool";
+        contexts.push({
+          ...lastVisibleContext,
+          id: String(message.id),
+          role: outputLike ? "assistant" : lastVisibleContext.role,
+          author: outputLike ? "ChatGPT" : lastVisibleContext.author,
+          summary: outputLike && contentMarkdown
+            ? summarizeMessageText(contentMarkdown, "assistant")
+            : lastVisibleContext.summary,
+          contentMarkdown: contentMarkdown || lastVisibleContext.contentMarkdown,
+          sourceRole: role,
+          selectable: false
+        });
+      }
+    }
+
+    contexts.forEach((context, index) => {
+      if (context.selectable || !["assistant", "tool"].includes(context.sourceRole)) return;
+      for (let nextIndex = index + 1; nextIndex < contexts.length; nextIndex += 1) {
+        const candidate = contexts[nextIndex];
+        if (!candidate.selectable) continue;
+        if (candidate.role === "user") break;
+        if (candidate.role === "assistant") {
+          context.summary = candidate.summary;
+          context.promptSummary = candidate.promptSummary;
+          context.promptNumber = candidate.promptNumber;
+          break;
+        }
+      }
+    });
+
+    contexts.forEach((context, index) => {
+      if (context.role !== "assistant" || context.summary) return;
+      for (let previousIndex = index - 1; previousIndex >= 0; previousIndex -= 1) {
+        const candidate = contexts[previousIndex];
+        if (candidate.promptNumber !== context.promptNumber) break;
+        if (candidate.role === "assistant" && candidate.summary) {
+          context.summary = candidate.summary;
+          return;
+        }
+      }
+      for (let nextIndex = index + 1; nextIndex < contexts.length; nextIndex += 1) {
+        const candidate = contexts[nextIndex];
+        if (candidate.promptNumber !== context.promptNumber) break;
+        if (candidate.role === "assistant" && candidate.summary) {
+          context.summary = candidate.summary;
+          return;
+        }
+      }
+    });
+
+    const groups = [];
+    contexts.filter(context => context.selectable).forEach(context => {
+      const previous = groups.at(-1);
+      if (context.role === "assistant"
+          && previous?.role === "assistant"
+          && previous.promptNumber === context.promptNumber) {
+        previous.messageIds.push(context.id);
+        previous.contentMarkdown = [previous.contentMarkdown, context.contentMarkdown]
+          .filter(Boolean)
+          .join("\n\n");
+        const combinedSummary = summarizeMessageText(previous.contentMarkdown, "assistant");
+        if (combinedSummary) previous.summary = combinedSummary;
+        return;
+      }
+
+      groups.push({
+        ...context,
+        messageIds: [context.id],
+        relatedMessageIds: []
+      });
+    });
+
+    contexts.filter(context => !context.selectable).forEach(context => {
+      const candidates = groups.filter(group =>
+        group.promptNumber === context.promptNumber
+        && group.role === context.role
+      );
+      const target = candidates.at(-1)
+        || groups.filter(group => group.promptNumber === context.promptNumber).at(-1);
+      if (target) target.relatedMessageIds.push(context.id);
+    });
+
+    return groups;
+  }
+
   function partToMarkdown(part, attachmentMap, imageIndex) {
     if (typeof part === "string") {
       return cleanInternalMarkers(part);
@@ -194,28 +406,46 @@
     return title || String(fallbackTitle || "Conversation with ChatGPT").trim();
   }
 
-  function buildConversationMarkdown(conversation, fallbackTitle) {
-    const parts = [];
+  function buildConversationMarkdown(conversation, fallbackTitle, options = {}) {
+    const includedMessageIds = options.includedMessageIds
+      ? new Set(options.includedMessageIds)
+      : null;
+    const messages = [];
 
     for (const message of getActiveMessages(conversation)) {
-      if (!isVisibleConversationMessage(message)) {
-        continue;
-      }
-
+      if (!isVisibleConversationMessage(message)) continue;
       const markdown = messageToMarkdown(message);
-      if (!markdown) {
-        continue;
-      }
-
-      const author = message.author?.role === "user" ? "User" : "ChatGPT";
-      parts.push(`**${author}**:\n\n${markdown}`);
+      if (!markdown) continue;
+      messages.push({
+        id: String(message.id || ""),
+        role: message.author?.role === "user" ? "user" : "assistant",
+        author: message.author?.role === "user" ? "User" : "ChatGPT",
+        markdown
+      });
     }
 
-    if (!parts.length) {
+    if (!messages.length) {
       throw new Error("Unable to find any conversation content to download");
     }
 
     const title = getConversationTitle(conversation, fallbackTitle).replace(/[\r\n]+/g, " ");
+    const groupedMessages = [];
+    messages.forEach(item => {
+      const previous = groupedMessages.at(-1);
+      if (item.role === "assistant" && previous?.role === "assistant") {
+        previous.markdown = `${previous.markdown}\n\n${item.markdown}`;
+        previous.messageIds.push(item.id);
+      } else {
+        groupedMessages.push({ ...item, messageIds: [item.id] });
+      }
+    });
+    const parts = groupedMessages
+      .filter(item => !includedMessageIds
+        || item.messageIds.some(id => includedMessageIds.has(id)))
+      .map(item => `**${item.author}**:\n\n${item.markdown}`);
+    if (!parts.length) {
+      throw new Error("Unable to find any conversation content to download");
+    }
     return `# ${title}\n\n${parts.join("\n\n---\n\n")}`.trim();
   }
 
@@ -243,7 +473,16 @@
     };
   }
 
-  function buildConversationJsonData(conversation, fallbackTitle, files = [], sourceUrl = "") {
+  function buildConversationJsonData(
+    conversation,
+    fallbackTitle,
+    files = [],
+    sourceUrl = "",
+    options = {}
+  ) {
+    const includedMessageIds = options.includedMessageIds
+      ? new Set(options.includedMessageIds)
+      : null;
     const exportedFiles = files.map(serializeExportFile);
     const filesByMessage = new Map();
 
@@ -258,6 +497,9 @@
     for (const node of getMessageNodes(conversation)) {
       const message = node?.message;
       if (!isVisibleConversationMessage(message)) {
+        continue;
+      }
+      if (includedMessageIds && !includedMessageIds.has(String(message.id || node.id || ""))) {
         continue;
       }
 
@@ -801,6 +1043,7 @@
   return {
     buildConversationMarkdown,
     buildConversationJsonData,
+    buildConversationMessageContexts,
     collectConversationFiles,
     extractConversationId,
     filenameFromPath,
@@ -808,6 +1051,7 @@
     getConversationTitle,
     isVisibleConversationMessage,
     messageToMarkdown,
+    summarizeMessageText,
     stripFileServicePrefix
   };
 });

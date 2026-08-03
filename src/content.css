@@ -32,6 +32,292 @@
   box-shadow: 0 24px 80px rgb(0 0 0 / 30%);
 }
 
+.chatgpt-export-dialog input[type="checkbox"] {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  margin: 0;
+  padding: 0;
+  appearance: none;
+  place-items: center;
+  border: 1.5px solid color-mix(in srgb, var(--text-primary, #0d0d0d) 42%, transparent);
+  border-radius: 5px;
+  background: var(--main-surface-primary, #fff);
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.chatgpt-export-dialog input[type="checkbox"]::after {
+  width: 8px;
+  height: 4px;
+  border-bottom: 2px solid var(--main-surface-primary, #fff);
+  border-left: 2px solid var(--main-surface-primary, #fff);
+  content: "";
+  transform: translateY(-1px) rotate(-45deg) scale(0);
+  transition: transform 100ms ease;
+}
+
+.chatgpt-export-dialog input[type="checkbox"]:hover {
+  border-color: var(--text-primary, #0d0d0d);
+}
+
+.chatgpt-export-dialog input[type="checkbox"]:checked,
+.chatgpt-export-dialog input[type="checkbox"]:indeterminate {
+  border-color: var(--text-primary, #0d0d0d);
+  background: var(--text-primary, #0d0d0d);
+}
+
+.chatgpt-export-dialog input[type="checkbox"]:checked::after {
+  transform: translateY(-1px) rotate(-45deg) scale(1);
+}
+
+.chatgpt-export-dialog input[type="checkbox"]:indeterminate::after {
+  width: 8px;
+  height: 2px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--main-surface-primary, #fff);
+  transform: none;
+}
+
+.chatgpt-export-dialog input[type="checkbox"]:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--text-primary, #0d0d0d) 18%, transparent);
+}
+
+.chatgpt-export-unified-dialog {
+  width: min(760px, 100%);
+}
+
+.chatgpt-export-unified-dialog [hidden] {
+  display: none !important;
+}
+
+.chatgpt-export-unified-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 22px 14px;
+  padding: 9px 10px;
+  border: 1px solid var(--border-light, #dedede);
+  border-radius: 12px;
+  background: var(--main-surface-secondary, #f7f7f7);
+}
+
+.chatgpt-export-view-switch {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--border-light, #dedede);
+  border-radius: 9px;
+  background: var(--main-surface-primary, #fff);
+}
+
+.chatgpt-export-view-button {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary, #676767);
+  cursor: pointer;
+}
+
+.chatgpt-export-view-button:hover {
+  background: var(--surface-hover, rgb(0 0 0 / 6%));
+  color: var(--text-primary, #0d0d0d);
+}
+
+.chatgpt-export-view-button.is-active {
+  background: var(--text-primary, #0d0d0d);
+  color: var(--main-surface-primary, #fff);
+}
+
+.chatgpt-export-view-button svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.5;
+}
+
+.chatgpt-export-json-option {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+  margin-inline-start: auto;
+  color: var(--text-secondary, #676767);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.chatgpt-download-tooltip {
+  z-index: 2147483647 !important;
+}
+
+.chatgpt-export-json-option input {
+  width: 16px;
+  height: 16px;
+  flex-basis: 16px;
+}
+
+.chatgpt-export-unified-body {
+  padding-bottom: 14px;
+}
+
+.chatgpt-export-empty-files {
+  display: none;
+  margin: 0;
+  padding: 14px;
+  border: 1px dashed var(--border-light, #dedede);
+  border-radius: 11px;
+  color: var(--text-secondary, #676767);
+  font-size: 13px;
+}
+
+.chatgpt-export-message-dialog {
+  width: min(720px, 100%);
+}
+
+.chatgpt-export-message-body {
+  padding-bottom: 14px;
+}
+
+.chatgpt-export-message-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.chatgpt-export-message-list.is-files-view .chatgpt-export-empty-files {
+  display: block;
+}
+
+.chatgpt-export-message-list-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-light, #dedede);
+  border-radius: 11px;
+  background: var(--main-surface-secondary, #f7f7f7);
+  cursor: pointer;
+}
+
+.chatgpt-export-message-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 2px 4px;
+  cursor: pointer;
+}
+
+.chatgpt-export-message-turn {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.chatgpt-export-message-files {
+  display: none;
+  width: min(76%, 510px);
+  overflow: hidden;
+  border: 1px solid var(--border-light, #dedede);
+  border-radius: 11px;
+  background: var(--main-surface-primary, #fff);
+}
+
+.chatgpt-export-message-list.is-files-view .chatgpt-export-message-files {
+  display: block;
+}
+
+.chatgpt-export-message-turn.is-user .chatgpt-export-message-files {
+  align-self: flex-end;
+  margin-inline-end: 30px;
+}
+
+.chatgpt-export-message-turn.is-assistant .chatgpt-export-message-files {
+  align-self: flex-start;
+  margin-inline-start: 30px;
+}
+
+.chatgpt-export-message-files.is-unmatched {
+  width: 100%;
+  margin-top: 5px;
+}
+
+.chatgpt-export-message-files-header {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  background: var(--main-surface-secondary, #f7f7f7);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.chatgpt-export-message-files .chatgpt-export-file-row {
+  padding: 8px 10px;
+  border-top: 1px solid var(--border-light, #e8e8e8);
+  background: var(--main-surface-primary, #fff);
+  font-size: 13px;
+}
+
+.chatgpt-export-message-row.is-user {
+  flex-direction: row-reverse;
+}
+
+.chatgpt-export-message-count {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.chatgpt-export-message-role {
+  color: var(--text-secondary, #676767);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.chatgpt-export-message-bubble {
+  display: flex;
+  width: min(82%, 540px);
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-light, #dedede);
+  border-radius: 16px;
+}
+
+.chatgpt-export-message-row.is-user .chatgpt-export-message-bubble {
+  background: var(--main-surface-secondary, #f7f7f7);
+  border-end-end-radius: 5px;
+}
+
+.chatgpt-export-message-row.is-assistant .chatgpt-export-message-bubble {
+  border-end-start-radius: 5px;
+}
+
+.chatgpt-export-message-summary {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text-primary, #0d0d0d);
+  font-size: 13px;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
 .chatgpt-export-dialog-header {
   display: flex;
   align-items: center;
@@ -140,15 +426,17 @@
   font-size: 14px;
 }
 
-.chatgpt-export-file-row:hover {
-  background: var(--surface-hover, rgb(0 0 0 / 4%));
+.chatgpt-export-file-row {
+  align-items: flex-start;
 }
 
-.chatgpt-export-file-group input[type="checkbox"] {
-  width: 17px;
-  height: 17px;
-  flex: 0 0 17px;
-  accent-color: var(--text-primary, #0d0d0d);
+.chatgpt-export-file-row > input,
+.chatgpt-export-file-row > select {
+  margin-top: 2px;
+}
+
+.chatgpt-export-file-row:hover {
+  background: var(--surface-hover, rgb(0 0 0 / 4%));
 }
 
 .chatgpt-export-file-details {
@@ -168,6 +456,30 @@
 .chatgpt-export-file-meta {
   color: var(--text-secondary, #737373);
   font-size: 12px;
+}
+
+.chatgpt-export-file-context {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+  padding-inline-start: 9px;
+  border-inline-start: 2px solid var(--border-light, #d9d9d9);
+}
+
+.chatgpt-export-file-context-line {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text-secondary, #676767);
+  font-size: 12px;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.chatgpt-export-file-context-line.is-response {
+  color: color-mix(in srgb, var(--text-primary, #0d0d0d) 76%, transparent);
 }
 
 .chatgpt-export-direction-select {
@@ -215,6 +527,11 @@
 
 .chatgpt-export-primary-button:hover {
   opacity: .86;
+}
+
+.chatgpt-export-primary-button:disabled {
+  cursor: not-allowed;
+  opacity: .38;
 }
 
 .chatgpt-export-toast {
@@ -343,5 +660,18 @@
   .chatgpt-export-primary-button,
   .chatgpt-export-secondary-button {
     width: 100%;
+  }
+
+  .chatgpt-export-message-bubble {
+    width: calc(100% - 26px);
+  }
+
+  .chatgpt-export-unified-toolbar {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .chatgpt-export-json-option {
+    margin-inline-start: auto;
   }
 }

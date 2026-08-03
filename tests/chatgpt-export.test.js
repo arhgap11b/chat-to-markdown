@@ -1,10 +1,12 @@
 const assert = require("node:assert/strict");
 const {
   buildConversationJsonData,
+  buildConversationMessageContexts,
   buildConversationMarkdown,
   collectConversationFiles,
   extractConversationId,
-  getActiveMessages
+  getActiveMessages,
+  summarizeMessageText
 } = require("../src/chatgpt-export.js");
 
 function node(id, parent, message) {
@@ -176,12 +178,21 @@ assert.deepEqual(
 
 const markdown = buildConversationMarkdown(conversation);
 assert.match(markdown, /^# Long architecture chat/);
+assert.match(markdown, /\*\*User\*\*:/);
+assert.match(markdown, /\*\*ChatGPT\*\*:/);
 assert.match(markdown, /Please inspect the attached source\./);
 assert.match(markdown, /\[Attachment: notes\.txt\]/);
 assert.match(markdown, /Created \[the report\]/);
 assert.match(markdown, /Now make a spreadsheet\./);
 assert.doesNotMatch(markdown, /This branch is not active/);
 assert.doesNotMatch(markdown, /tool output/);
+assert.doesNotMatch(markdown, /## 1\./);
+
+const selectedMarkdown = buildConversationMarkdown(conversation, "", {
+  includedMessageIds: ["user-2", "assistant-2"]
+});
+assert.match(selectedMarkdown, /Now make a spreadsheet\./);
+assert.doesNotMatch(selectedMarkdown, /Please inspect the attached source\./);
 
 const files = collectConversationFiles(conversation);
 assert.deepEqual(
@@ -231,6 +242,79 @@ assert.equal(jsonData.messages[0].parentId, "root");
 assert.equal(jsonData.messages[0].files[0].link, "./input/source.pdf");
 assert.equal(jsonData.files[1].path, "input/notes.txt");
 assert.doesNotThrow(() => JSON.stringify(jsonData));
+
+const selectedJsonData = buildConversationJsonData(
+  conversation,
+  "",
+  [],
+  "https://chatgpt.com/c/example",
+  { includedMessageIds: ["user-2", "assistant-2"] }
+);
+assert.deepEqual(selectedJsonData.messages.map(item => item.id), ["user-2", "assistant-2"]);
+
+const messageContexts = buildConversationMessageContexts(conversation, [
+  "Inspect the architecture source",
+  "Create the final spreadsheet"
+]);
+assert.equal(messageContexts.find(item => item.id === "user-1").summary, "Inspect the architecture source");
+assert.equal(messageContexts.find(item => item.id === "assistant-1").promptNumber, 1);
+assert.deepEqual(messageContexts.find(item => item.id === "assistant-1").messageIds, ["assistant-1"]);
+assert.deepEqual(messageContexts.find(item => item.id === "assistant-1").relatedMessageIds, ["tool-1"]);
+assert.equal(messageContexts.find(item => item.id === "assistant-1").promptSummary, "Inspect the architecture source");
+assert.equal(messageContexts.find(item => item.id === "user-2").promptNumber, 2);
+
+assert.equal(
+  summarizeMessageText(
+    "First sentence explains the result. " + "Details ".repeat(40) + ". The final sentence gives the conclusion.",
+    "assistant"
+  ),
+  "First sentence explains the result. … The final sentence gives the conclusion."
+);
+assert.equal(
+  summarizeMessageText(
+    "The audit is complete. [Download report](sandbox:/mnt/data/ATLAS_report(2).md)",
+    "assistant"
+  ),
+  "The audit is complete."
+);
+
+const fileOnlyResponseContexts = buildConversationMessageContexts({
+  messages: [
+    message("context-user", "user", ["Please finish the architecture audit."]),
+    message("context-answer", "assistant", ["The audit is complete and all findings have been reconciled."]),
+    message("context-file", "assistant", ["[Download report](sandbox:/mnt/data/ATLAS_report(2).md)"])
+  ]
+});
+const groupedFileResponse = fileOnlyResponseContexts.find(item => item.id === "context-answer");
+assert.deepEqual(groupedFileResponse.messageIds, ["context-answer", "context-file"]);
+assert.equal(groupedFileResponse.summary, "The audit is complete and all findings have been reconciled.");
+
+const splitAssistantConversation = {
+  title: "Grouped assistant response",
+  messages: [
+    message("group-user", "user", ["Review the system."]),
+    message("group-answer-1", "assistant", ["The review is complete."]),
+    message("group-answer-2", "assistant", ["The main risk is the deployment path."])
+  ]
+};
+const splitAssistantContexts = buildConversationMessageContexts(splitAssistantConversation);
+assert.equal(splitAssistantContexts.length, 2);
+assert.deepEqual(
+  splitAssistantContexts.find(item => item.role === "assistant").messageIds,
+  ["group-answer-1", "group-answer-2"]
+);
+assert.equal(
+  (buildConversationMarkdown(splitAssistantConversation).match(/\*\*ChatGPT\*\*:/g) || []).length,
+  1
+);
+
+const separatedSelectedReplies = buildConversationMarkdown(conversation, "", {
+  includedMessageIds: ["assistant-1", "assistant-2"]
+});
+assert.equal(
+  (separatedSelectedReplies.match(/\*\*ChatGPT\*\*:/g) || []).length,
+  2
+);
 
 const parenthesizedFiles = collectConversationFiles({
   messages: [

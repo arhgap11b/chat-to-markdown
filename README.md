@@ -27,9 +27,13 @@
 - **Inline download buttons** next to every message — matches native Copy button style on each platform
 - **Complete long-chat export** — reads the full active conversation branch even when ChatGPT virtualizes older messages
 - **Selectable file downloads** — choose any input attachments and generated output documents to download with the Markdown context
+- **Three compact export views** — export the entire chat, select individual messages, or select messages and files together in one dialog
+- **Inline file groups** — attachments are grouped directly under the logical message they belong to, with group and per-file selection
+- **Chat-style message picker** — select logical User/ChatGPT replies from familiar conversation bubbles; multi-part ChatGPT replies stay grouped as one answer
+- **Native-feeling controls** — compact custom checkboxes and the same hover hints used by the message download buttons
 - **Role-aware file discovery** — recognizes uploaded and generated files from attachments, nested references, citations, artifacts, `file-service://`, `sediment://`, sandbox paths, signed URLs, and current ChatGPT file buttons
 - **Correctable direction** — every picker row can be switched between input and output before download
-- **Portable Markdown + JSON export** — both context documents stay at the export root and record ordered authorship plus relative links to selected files
+- **Portable Markdown + optional JSON export** — Markdown stays at the export root, JSON can be added on demand, and both use relative links to selected files
 - **Clean attachment folders** — selected files are stored directly under `input/` and `output/` without an extra wrapper folder
 - **Automatic ZIP packaging** — when the export contains more than two files in total, one archive preserves the complete relative folder layout
 - **Live export progress** — animated loading state for full-chat retrieval and a determinate progress bar for file downloads and ZIP creation

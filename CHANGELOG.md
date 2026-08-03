@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.40] - 2026-08-03
+
+### Added
+- One export dialog with three small view icons: entire chat, selected messages, and selected messages with files
+- Chat-style message and file selection in the same scrollable view
+- Optional JSON sidecar, disabled by default
+- Context-aware message previews, using ChatGPT navigator labels when available and generated first/last-sentence summaries otherwise
+- Files from the same logical message are grouped directly beneath that chat bubble
+
+### Changed
+- Markdown always keeps the chronological User/ChatGPT conversation layout
+- Consecutive internal ChatGPT messages are grouped as one logical reply in the picker and Markdown
+- The default entire-chat view shows no message or file selection lists
+- Message previews discard attachment labels and download links instead of repeating filenames
+- Export controls now use compact custom checkboxes and the same hover hints as the existing download buttons
+
 ## [0.39] - 2026-08-03
 
 ### Fixed
