@@ -1514,6 +1514,9 @@
       viewSwitch.className = "chatgpt-export-view-switch";
       viewSwitch.setAttribute("role", "group");
       viewSwitch.setAttribute("aria-label", strings.modeTitle);
+      const activeViewCaption = document.createElement("span");
+      activeViewCaption.className = "chatgpt-export-active-view-caption";
+      activeViewCaption.setAttribute("aria-live", "polite");
 
       const modes = [
         {
@@ -1554,7 +1557,7 @@
       const jsonLabel = document.createElement("span");
       jsonLabel.textContent = strings.includeJson;
       jsonOption.append(jsonCheckbox, jsonLabel);
-      toolbar.append(viewSwitch, jsonOption);
+      toolbar.append(viewSwitch, activeViewCaption, jsonOption);
 
       const body = document.createElement("div");
       body.className = "chatgpt-export-dialog-body chatgpt-export-unified-body";
@@ -1739,6 +1742,7 @@
           button.classList.toggle("is-active", active);
           button.setAttribute("aria-pressed", String(active));
         });
+        activeViewCaption.textContent = modes.find(item => item.value === selectedMode)?.title || "";
         messageSection.hidden = selectedMode === "full";
         messageSection.classList.toggle("is-files-view", selectedMode === "messages-files");
         updateState();
