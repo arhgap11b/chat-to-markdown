@@ -26,6 +26,7 @@
 
 - **Inline download buttons** next to every message — matches native Copy button style on each platform
 - **Complete long-chat export** — reads the full active conversation branch even when ChatGPT virtualizes older messages
+- **Deep Research capture** — extracts complete reports from ChatGPT's sandboxed research frame and restores them to the correct conversation turn
 - **Selectable file downloads** — choose any input attachments and generated output documents to download with the Markdown context
 - **Three compact export views** — export the entire chat, select individual messages, or select messages and files together in one dialog
 - **Inline file groups** — attachments are grouped directly under the logical message they belong to, with group and per-file selection
@@ -42,6 +43,7 @@
 - **Smart file naming** — files named after conversation title, author-aware prefixes
 - **Unicode support** — Cyrillic, Chinese, Arabic and other non-Latin characters preserved
 - **Language-aware UI** — dialogs, progress messages, and tooltips adapt to English, Russian, and Ukrainian interfaces
+- **Dark/OLED theme contrast** — the export dialog stays visually separated from ChatGPT's dimmed background
 - **Cross-tab sync** — research counter shared via localStorage across all tabs
 - **Markdown conversion** — Turndown + GFM for clean, readable output
 

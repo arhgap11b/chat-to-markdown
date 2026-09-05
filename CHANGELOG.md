@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.41] - 2026-08-04
+
+### Added
+- Deep Research frame capture through a dedicated sandbox content script
+- Automatic reinsertion of extracted research reports into their logical ChatGPT reply
+
+### Changed
+- Increased dialog surface and border contrast in ChatGPT dark and OLED themes
+
+### Fixed
+- Deep Research replies rendered through `internal://deep-research` are no longer omitted from Markdown and JSON exports
+
 ## [0.40] - 2026-08-03
 
 ### Added

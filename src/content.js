@@ -1,5 +1,5 @@
 (() => {
-  const SCRIPT_VERSION = "2026.08.03-11";
+  const SCRIPT_VERSION = "2026.08.04-01";
   if (window.__chatgptDownloaderInjected) {
     return;
   }
@@ -780,6 +780,89 @@
       if (summary) summaries[index] = summary;
     });
     return summaries;
+  }
+
+  function getDeepResearchFrameContext(frame, fallbackIndex) {
+    const turn = frame.closest("[data-testid^='conversation-turn-'][data-turn], [data-turn-id][data-turn]");
+    const turns = Array.from(document.querySelectorAll(
+      "[data-testid^='conversation-turn-'][data-turn], [data-turn-id][data-turn]"
+    ));
+    const uniqueTurns = turns.filter((candidate, index) =>
+      !turns.some((other, otherIndex) =>
+        otherIndex < index && other.contains(candidate)
+      )
+    );
+    const turnIndex = turn ? uniqueTurns.indexOf(turn) : -1;
+    const precedingTurns = turnIndex >= 0 ? uniqueTurns.slice(0, turnIndex + 1) : [];
+    const promptNumber = precedingTurns.filter(candidate =>
+      candidate.getAttribute("data-turn") === "user"
+    ).length;
+    return {
+      id: `deep-research-${fallbackIndex + 1}`,
+      turnId: turn?.getAttribute("data-turn-id")
+        || turn?.closest("[data-turn-id-container]")?.getAttribute("data-turn-id-container")
+        || "",
+      turnIndex,
+      promptNumber
+    };
+  }
+
+  function requestDeepResearchReports(timeoutMs = 4500) {
+    const frames = Array.from(document.querySelectorAll(
+      'iframe[title="internal://deep-research"], iframe[src*="deep-research"]'
+    ));
+    if (!frames.length) return Promise.resolve([]);
+
+    const requestType = "chat-to-markdown:deep-research-request";
+    const responseType = "chat-to-markdown:deep-research-response";
+    const pending = new Map();
+
+    return new Promise(resolve => {
+      const reports = [];
+      let remaining = frames.length;
+
+      function finishRequest(requestId, report) {
+        const item = pending.get(requestId);
+        if (!item) return;
+        pending.delete(requestId);
+        item.timers.forEach(timer => window.clearTimeout(timer));
+        if (report?.markdown) reports.push({ ...item.context, ...report });
+        remaining -= 1;
+        if (remaining > 0) return;
+        window.removeEventListener("message", onMessage);
+        reports.sort((left, right) => left.turnIndex - right.turnIndex);
+        resolve(reports);
+      }
+
+      function onMessage(event) {
+        const data = event.data;
+        if (data?.type !== responseType || !pending.has(data.requestId)) return;
+        const item = pending.get(data.requestId);
+        if (event.source !== item.frame.contentWindow) return;
+        finishRequest(data.requestId, {
+          markdown: String(data.markdown || "").trim(),
+          title: String(data.title || "").trim()
+        });
+      }
+
+      window.addEventListener("message", onMessage);
+      frames.forEach((frame, index) => {
+        const requestId = `deep-research-${Date.now()}-${index}-${Math.random().toString(36).slice(2)}`;
+        const payload = { type: requestType, requestId };
+        const send = () => frame.contentWindow?.postMessage(payload, "*");
+        const timers = [
+          window.setTimeout(send, 450),
+          window.setTimeout(send, 1200),
+          window.setTimeout(() => finishRequest(requestId, null), timeoutMs)
+        ];
+        pending.set(requestId, {
+          frame,
+          context: getDeepResearchFrameContext(frame, index),
+          timers
+        });
+        send();
+      });
+    });
   }
 
   function buildDomMessageContexts(navigatorSummaries = []) {
@@ -2133,6 +2216,7 @@
       let messageContexts = [];
       let title = getConversationTitle();
       const navigatorSummaries = collectNavigatorSummaries();
+      const deepResearchPromise = requestDeepResearchReports();
 
       if (conversationId) {
         if (!exportCore) {
@@ -2144,6 +2228,15 @@
             strings.loadedMessages.replace("{count}", String(messageCount))
           );
         });
+        const deepResearchReports = await deepResearchPromise;
+        exportCore.mergeDeepResearchReports(conversation, deepResearchReports);
+        if (deepResearchReports.length) {
+          console.info("[chat-to-markdown] captured deep research reports", deepResearchReports.map(report => ({
+            title: report.title,
+            promptNumber: report.promptNumber,
+            length: report.markdown.length
+          })));
+        }
         title = exportCore.getConversationTitle(conversation, title);
         messageContexts = exportCore.buildConversationMessageContexts(
           conversation,
@@ -2157,6 +2250,7 @@
           messageContexts
         );
       } else {
+        await deepResearchPromise;
         messageContexts = buildDomMessageContexts(navigatorSummaries);
         files = attachFileMessageContexts(collectDomFiles(), messageContexts);
       }

@@ -32,6 +32,26 @@
   box-shadow: 0 24px 80px rgb(0 0 0 / 30%);
 }
 
+:is(html.dark, html[data-theme="dark"]) .chatgpt-export-dialog-overlay {
+  background: rgb(0 0 0 / 72%);
+}
+
+:is(html.dark, html[data-theme="dark"]) .chatgpt-export-dialog {
+  border-color: rgb(255 255 255 / 20%);
+  background: color-mix(in srgb, var(--main-surface-primary, #0d0d0d) 84%, white);
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 7%), 0 28px 90px rgb(0 0 0 / 72%);
+}
+
+:is(html.dark, html[data-theme="dark"]) .chatgpt-export-unified-toolbar,
+:is(html.dark, html[data-theme="dark"]) .chatgpt-export-message-list-header {
+  border-color: rgb(255 255 255 / 15%);
+  background: rgb(255 255 255 / 8%);
+}
+
+:is(html.dark, html[data-theme="dark"]) .chatgpt-export-dialog-footer {
+  border-top-color: rgb(255 255 255 / 14%);
+}
+
 .chatgpt-export-dialog input[type="checkbox"] {
   display: grid;
   width: 18px;

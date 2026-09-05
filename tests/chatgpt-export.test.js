@@ -6,6 +6,7 @@ const {
   collectConversationFiles,
   extractConversationId,
   getActiveMessages,
+  mergeDeepResearchReports,
   summarizeMessageText
 } = require("../src/chatgpt-export.js");
 
@@ -314,6 +315,31 @@ const separatedSelectedReplies = buildConversationMarkdown(conversation, "", {
 assert.equal(
   (separatedSelectedReplies.match(/\*\*ChatGPT\*\*:/g) || []).length,
   2
+);
+
+const deepResearchConversation = {
+  title: "Network library research",
+  messages: [
+    message("research-user", "user", ["Research the available networking libraries."]),
+    message("research-plan", "assistant", ["I will compare the available options."]),
+    message("request-WEB:research-result-1", "assistant", [], {
+      command: "deep_research"
+    }, "web")
+  ]
+};
+mergeDeepResearchReports(deepResearchConversation, [{
+  id: "captured-research",
+  turnId: "request-WEB:research-result-1",
+  promptNumber: 1,
+  markdown: "# Networking libraries\n\nThe complete deep research report."
+}]);
+const deepResearchMarkdown = buildConversationMarkdown(deepResearchConversation);
+assert.match(deepResearchMarkdown, /# Networking libraries/);
+assert.match(deepResearchMarkdown, /complete deep research report/);
+assert.equal(deepResearchConversation.messages[2].recipient, "all");
+assert.equal(
+  deepResearchConversation.messages[2].metadata.chat_to_markdown_deep_research,
+  true
 );
 
 const parenthesizedFiles = collectConversationFiles({

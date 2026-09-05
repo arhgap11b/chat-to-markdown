@@ -399,6 +399,110 @@
     return converted.join("\n\n").trim();
   }
 
+  function isDeepResearchMessage(message, report) {
+    const identifiers = [
+      message?.id,
+      message?.recipient,
+      message?.content?.content_type,
+      message?.metadata?.request_id,
+      message?.metadata?.command,
+      message?.metadata?.model_slug
+    ].map(value => String(value || "")).join(" ");
+    if (/deep[-_ ]?research|request-WEB/i.test(identifiers)) return true;
+
+    const reportToken = String(report?.turnId || "").match(/[0-9a-f]{8}-[0-9a-f-]{27,}/i)?.[0];
+    if (!reportToken) return false;
+    try {
+      return JSON.stringify({
+        id: message?.id,
+        metadata: message?.metadata,
+        contentType: message?.content?.content_type
+      }).includes(reportToken);
+    } catch {
+      return false;
+    }
+  }
+
+  function appendSyntheticConversationMessage(conversation, report, index) {
+    const id = String(report.id || `deep-research-${Date.now()}-${index + 1}`);
+    const message = {
+      id,
+      author: { role: "assistant", name: "ChatGPT" },
+      content: { content_type: "text", parts: [report.markdown] },
+      create_time: null,
+      update_time: null,
+      recipient: "all",
+      metadata: { chat_to_markdown_deep_research: true }
+    };
+
+    if (Array.isArray(conversation?.messages)) {
+      conversation.messages.push(message);
+      return message;
+    }
+
+    if (conversation?.mapping && typeof conversation.mapping === "object") {
+      const parent = conversation.current_node || null;
+      conversation.mapping[id] = { id, parent, children: [], message };
+      if (parent && conversation.mapping[parent]) {
+        const children = conversation.mapping[parent].children;
+        if (Array.isArray(children) && !children.includes(id)) children.push(id);
+      }
+      conversation.current_node = id;
+      return message;
+    }
+
+    conversation.messages = [message];
+    return message;
+  }
+
+  function mergeDeepResearchReports(conversation, reports = []) {
+    if (!conversation || !Array.isArray(reports) || !reports.length) return conversation;
+    const messages = getActiveMessages(conversation);
+    const assistantGroups = new Map();
+    let promptNumber = 0;
+
+    messages.forEach(message => {
+      const role = String(message?.author?.role || "");
+      if (role === "user") {
+        promptNumber += 1;
+        return;
+      }
+      if (role !== "assistant") return;
+      const group = assistantGroups.get(promptNumber) || [];
+      group.push(message);
+      assistantGroups.set(promptNumber, group);
+    });
+
+    reports.forEach((report, index) => {
+      const markdown = String(report?.markdown || "").trim();
+      if (!markdown) return;
+      const candidates = assistantGroups.get(Number(report.promptNumber) || 0) || [];
+      const target = [...candidates].reverse().find(message => isDeepResearchMessage(message, report))
+        || [...candidates].reverse().find(message => !messageToMarkdown(message))
+        || candidates.at(-1)
+        || null;
+
+      if (!target) {
+        appendSyntheticConversationMessage(conversation, report, index);
+        return;
+      }
+
+      const existing = messageToMarkdown(target);
+      const reportPrefix = markdown.replace(/\s+/g, " ").slice(0, 180);
+      const existingNormalized = existing.replace(/\s+/g, " ");
+      if (!reportPrefix || !existingNormalized.includes(reportPrefix)) {
+        target.content = { content_type: "text", parts: [markdown] };
+      }
+      target.recipient = "all";
+      target.metadata = {
+        ...(target.metadata || {}),
+        is_visually_hidden_from_conversation: false,
+        chat_to_markdown_deep_research: true
+      };
+    });
+    return conversation;
+  }
+
   function getConversationTitle(conversation, fallbackTitle) {
     const title = conversation && typeof conversation.title === "string"
       ? conversation.title.trim()
@@ -1051,6 +1155,7 @@
     getConversationTitle,
     isVisibleConversationMessage,
     messageToMarkdown,
+    mergeDeepResearchReports,
     summarizeMessageText,
     stripFileServicePrefix
   };
