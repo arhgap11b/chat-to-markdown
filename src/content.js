@@ -1,5 +1,5 @@
 (() => {
-  const SCRIPT_VERSION = "2026.08.04-01";
+  const SCRIPT_VERSION = "2026.10.20-01";
   if (window.__chatgptDownloaderInjected) {
     return;
   }
@@ -11,7 +11,11 @@
   const CONVERSATION_BUTTON_CLASS = "chatgpt-conversation-download-button";
   const EXPORT_DIALOG_CLASS = "chatgpt-export-dialog-overlay";
   const MESSAGE_WRAPPER_ATTRIBUTE = "data-chatgpt-download-index";
-  const COPY_BUTTON_SELECTOR = 'button[data-testid="copy-turn-action-button"]';
+  const COPY_BUTTON_SELECTOR = [
+    'button[data-testid="copy-turn-action-button"]',
+    ...["Copy", "Copy message", "Копировать", "Копировать сообщение", "Копіювати", "Копіювати повідомлення"]
+      .map(label => `.turn-action-controls button[aria-label="${label}"]`)
+  ].join(", ");
   const processedCopyButtons = new WeakSet();
   const boundMessages = new WeakSet();
   let lastCopyButtonCount = 0;
@@ -67,7 +71,12 @@
     }
   }
 
+  const CURRENT_MESSAGE_SELECTOR = [
+    '[data-content-search-unit-key$=":user"]',
+    '[data-content-search-unit-key$=":assistant"]'
+  ].join(", ");
   const MESSAGE_SELECTORS = [
+    CURRENT_MESSAGE_SELECTOR,
     "[data-message-author-role]",
     "[data-message-id]",
     "article[data-testid*='conversation-turn']",
@@ -77,7 +86,7 @@
     "article",
     "[class*='group']"
   ];
-  const MESSAGE_NODE_SELECTOR = "[data-message-author-role], [data-message-id]";
+  const MESSAGE_NODE_SELECTOR = `[data-message-author-role], [data-message-id], ${CURRENT_MESSAGE_SELECTOR}`;
 
   const CONTENT_SELECTORS = [
     "[class*='whitespace-pre-wrap']",
@@ -153,7 +162,7 @@
           const className = node.getAttribute("class") || "";
           const language = (className.match(/language-([\w-]+)/) || [null, ""])[1];
           const fence = options.fence || "```";
-          const normalized = content.replace(/\n+$/, "").replace(/^\n+/, "");
+          const normalized = node.textContent.replace(/\n+$/, "").replace(/^\n+/, "");
           return `\n\n${fence}${language}\n${normalized}\n${fence}\n\n`;
         }
       });
@@ -182,8 +191,22 @@
     const clone = contentElement.cloneNode(true);
 
     clone.querySelectorAll(`.${MESSAGE_BUTTON_CLASS}`).forEach(node => node.remove());
+    clone.querySelectorAll("script, style").forEach(node => node.remove());
+    clone.querySelectorAll('[data-markdown-copy="exclude"]').forEach(node => node.remove());
     clone.querySelectorAll('[data-testid*="copy"], [data-testid*="toast"], [data-testid*="share"]').forEach(node => node.remove());
     clone.querySelectorAll('button, [role="button"]').forEach(node => node.remove());
+
+    // The current code renderer uses a div instead of pre, including for one-line blocks.
+    clone.querySelectorAll("[data-code-block-source]").forEach(source => {
+      const code = source.querySelector("code");
+      if (!code) return;
+      const pre = document.createElement("pre");
+      const cleanCode = document.createElement("code");
+      cleanCode.className = code.className;
+      cleanCode.textContent = code.textContent;
+      pre.appendChild(cleanCode);
+      source.replaceWith(pre);
+    });
 
     const images = clone.querySelectorAll("img");
     images.forEach((img, imageIndex) => {
@@ -264,7 +287,8 @@
   }
 
   function detectAuthor(messageElement) {
-    const directRole = messageElement.getAttribute("data-message-author-role");
+    const directRole = messageElement.getAttribute("data-message-author-role")
+      || messageElement.getAttribute("data-content-search-unit-key")?.split(":").at(-1);
     if (directRole === "user") return "User";
     if (directRole === "assistant") return "ChatGPT";
 
@@ -283,6 +307,15 @@
   }
 
   function locateContentElement(messageElement) {
+    const currentContent = messageElement.querySelectorAll(
+      '[data-markdown-text-style="assistant-message"], [data-markdown-text-tone="user-message"]'
+    );
+    if (currentContent.length) {
+      const container = document.createElement("div");
+      currentContent.forEach(node => container.appendChild(node.cloneNode(true)));
+      return container;
+    }
+
     for (const selector of CONTENT_SELECTORS) {
       const candidate = messageElement.querySelector(selector);
       if (candidate && candidate.textContent && candidate.textContent.trim()) {
@@ -340,6 +373,14 @@
     const directMatch = findMessageCandidate(copyButton.closest?.(MESSAGE_NODE_SELECTOR));
     if (directMatch) {
       return directMatch;
+    }
+
+    // Current turn wrappers contain both the user prompt and the assistant reply.
+    // Resolve the assistant toolbar inside its own turn before looking at siblings.
+    const currentTurn = copyButton.closest("[data-talvt-turn-state]");
+    if (currentTurn) {
+      const replies = currentTurn.querySelectorAll('[data-content-search-unit-key$=":assistant"]');
+      return replies[replies.length - 1] || null;
     }
 
     const siblingMatch = findMessageInSiblings(copyButton.parentElement);
@@ -439,7 +480,8 @@
   }
 
   function processCopyButton(copyButton) {
-    if (processedCopyButtons.has(copyButton)) {
+    if (processedCopyButtons.has(copyButton)
+      && copyButton.parentElement?.querySelector(`.${MESSAGE_BUTTON_CLASS}`)) {
       return;
     }
 
@@ -467,7 +509,7 @@
     const downloadButton = copyButton.cloneNode(true);
     downloadButton.innerHTML = "";
     const iconWrapper = document.createElement("span");
-    iconWrapper.className = copyButton.querySelector("span")?.className || "flex items-center justify-center touch:w-10 h-8 w-8";
+    iconWrapper.className = copyButton.querySelector("span")?.className || "flex items-center justify-center";
     iconWrapper.innerHTML = `
       <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
         <path d="M10 2a.75.75 0 0 1 .75.75v8.19l2.22-2.22a.75.75 0 1 1 1.06 1.06l-3.53 3.53a.75.75 0 0 1-1.06 0L5.91 9.78a.75.75 0 1 1 1.06-1.06l2.28 2.28V2.75A.75.75 0 0 1 10 2zm-5 12.25a.75.75 0 0 1 .75-.75h8.5a.75.75 0 0 1 0 1.5h-8.5a.75.75 0 0 1-.75-.75zm-.75 2.5a.75.75 0 0 1 .75-.75h11a.75.75 0 0 1 0 1.5h-11a.75.75 0 0 1-.75-.75z"></path>
@@ -481,6 +523,8 @@
     downloadButton.appendChild(iconWrapper);
     processedCopyButtons.add(copyButton);
     downloadButton.classList.add(MESSAGE_BUTTON_CLASS);
+    downloadButton.removeAttribute("id");
+    downloadButton.type = "button";
 
     const lang = detectLanguage();
     const messageTooltip = lang === 'uk'
@@ -508,7 +552,8 @@
         mode = 'skip';
       }
 
-      downloadSingleMessage(messageElement, mode);
+      const currentMessage = resolveMessageElementForButton(copyButton);
+      if (currentMessage) downloadSingleMessage(currentMessage, mode);
     });
 
     processedCopyButtons.add(downloadButton);
@@ -659,12 +704,22 @@
 
       const author = detectAuthor(messageElement);
       const role = author === "User" ? "user" : "assistant";
-      const id = messageElement.getAttribute("data-message-id") || `dom-message-${records.length + 1}`;
+      const id = getDomMessageId(messageElement) || `dom-message-${records.length + 1}`;
       messageElement.setAttribute(MESSAGE_WRAPPER_ATTRIBUTE, String(records.length));
       records.push({ id, author, role, markdown: segment, messageElement });
     });
 
     return records;
+  }
+
+  function getDomMessageId(messageElement) {
+    if (!messageElement) return "";
+    return messageElement.getAttribute("data-message-id")
+      || messageElement.querySelector("[data-chatgpt-selection-message-id]")
+        ?.getAttribute("data-chatgpt-selection-message-id")
+      || messageElement.closest("[data-chatgpt-search-message-ids]")
+        ?.getAttribute("data-chatgpt-search-message-ids")?.trim().split(/\s+/)[0]
+      || "";
   }
 
   function buildDomConversationMarkdown(options = {}) {
@@ -1159,7 +1214,7 @@
         mimeType: "",
         size: 0,
         direction,
-        messageId: messageElement?.getAttribute("data-message-id") || ""
+        messageId: getDomMessageId(messageElement)
       });
     });
 
@@ -1182,7 +1237,7 @@
       }
 
       const messageElement = button.closest(MESSAGE_NODE_SELECTOR);
-      const messageId = messageElement?.getAttribute("data-message-id") || "";
+      const messageId = getDomMessageId(messageElement);
       const key = `dom-output:${messageId || index}:${normalizedName}`;
       if (!files.has(key)) {
         files.set(key, {
@@ -2412,24 +2467,22 @@
 
   function createConversationButton() {
     const voiceButtonContainer = document.querySelector('[data-testid="composer-speech-button-container"]');
+    const composerButton = document.querySelector(
+      '[data-chatgpt-composer] [data-composer-navigation-target="add-context"]'
+    );
+    const composerAnchor = composerButton?.closest("span") || composerButton;
+    const headerActions = document.querySelector("#conversation-header-actions");
+    const anchor = voiceButtonContainer || composerAnchor;
+    const host = anchor?.parentElement || headerActions;
+    if (!host) return;
+
     const existingButton = document.querySelector(`.${CONVERSATION_BUTTON_CLASS}`);
-
-    if (voiceButtonContainer) {
-      const buttonInCorrectPlace = voiceButtonContainer.parentElement?.querySelector(`.${CONVERSATION_BUTTON_CLASS}`);
-
-      if (buttonInCorrectPlace) {
-        return;
+    if (existingButton) {
+      const wrapper = existingButton.closest('[data-chatgpt-download-button="true"]');
+      if (wrapper?.parentElement === host) return;
+      if (wrapper) {
+        wrapper.remove();
       }
-
-      if (existingButton) {
-        const wrapper = existingButton.closest('[data-chatgpt-download-button="true"]');
-        if (wrapper && wrapper.parentNode) {
-          wrapper.parentNode.removeChild(wrapper);
-          console.info("[chat-to-markdown] Removed conversation button from fallback location");
-        }
-      }
-    } else if (existingButton) {
-      return;
     }
 
     const lang = detectLanguage();
@@ -2442,7 +2495,9 @@
 
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "composer-btn";
+    button.className = !voiceButtonContainer && composerButton
+      ? composerButton.className
+      : "composer-btn";
     button.classList.add(CONVERSATION_BUTTON_CLASS);
     button.setAttribute("aria-label", ariaLabel);
     button.setAttribute("aria-pressed", "false");
@@ -2467,38 +2522,22 @@
       });
     });
 
-    if (voiceButtonContainer) {
-      const wrapper = document.createElement("span");
-      wrapper.className = "";
-      wrapper.setAttribute("data-state", "closed");
-      wrapper.setAttribute("data-chatgpt-download-button", "true");
-      wrapper.appendChild(button);
-      voiceButtonContainer.insertAdjacentElement("beforebegin", wrapper);
-      console.info("[chat-to-markdown] Conversation button inserted (before voice button)");
-      return;
+    const wrapper = document.createElement("span");
+    wrapper.className = "flex items-center";
+    wrapper.setAttribute("data-state", "closed");
+    wrapper.setAttribute("data-chatgpt-download-button", "true");
+    wrapper.appendChild(button);
+    if (anchor) {
+      anchor.insertAdjacentElement(voiceButtonContainer ? "beforebegin" : "afterend", wrapper);
+    } else {
+      host.appendChild(wrapper);
     }
-
-    const headerActions = document.querySelector('#conversation-header-actions');
-    if (headerActions) {
-      const wrapper = document.createElement("div");
-      wrapper.className = "flex items-center";
-      wrapper.setAttribute("data-chatgpt-download-button", "true");
-      const innerSpan = document.createElement("span");
-      innerSpan.className = "";
-      innerSpan.setAttribute("data-state", "closed");
-      innerSpan.appendChild(button);
-      wrapper.appendChild(innerSpan);
-      headerActions.appendChild(wrapper);
-      console.info("[chat-to-markdown] Conversation button inserted (fallback path - header)");
-      return;
-    }
-
-    console.warn("[chat-to-markdown] No suitable container found for conversation button");
   }
 
   function enhancePage() {
     indexMessages();
     bindMessageActions();
+    attachDownloadButtons();
     createConversationButton();
   }
 
@@ -2514,12 +2553,12 @@
             return;
           }
 
-          if (node.matches?.('[data-message-author-role]')) {
+          if (node.matches?.(MESSAGE_NODE_SELECTOR)) {
             bindMessageActions();
             ensureButtonsForMessage(node);
           }
 
-          node.querySelectorAll?.('[data-message-author-role]').forEach(message => {
+          node.querySelectorAll?.(MESSAGE_NODE_SELECTOR).forEach(message => {
             bindMessageActions();
             ensureButtonsForMessage(message);
           });

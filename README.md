@@ -67,6 +67,28 @@ git clone https://github.com/arhgap11b/chat-to-markdown.git
 
 Keep the `src` folder in place — moving it breaks the extension.
 
+### Updating
+
+Pull the latest changes, click **Reload** for chat-to-markdown on the extensions page,
+then refresh the open ChatGPT tabs. On the current ChatGPT layout, the full-chat
+download button appears beside **Add files**, and message downloads appear beside **Copy**.
+
+### Tests
+
+```sh
+npm ci
+npx playwright install chromium
+npm test
+```
+
+To use an existing Chrome installation instead of downloading Chromium:
+
+```sh
+CHROME_PATH=/usr/bin/google-chrome npm test
+```
+
+Browser tests use synthetic pages with external requests blocked; they do not use a signed-in browser profile.
+
 ## Architecture
 
 ```

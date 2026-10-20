@@ -1,0 +1,10 @@
+{
+  "name": "chat-to-markdown",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  },
+  "devDependencies": {
+    "playwright": "1.62.1"
+  }
+}

@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.42] - 2026-10-20
+
+### Fixed
+- Restored message download buttons for the current ChatGPT markup in English, Russian, and Ukrainian
+- Restored full-chat export beside the current composer's attachment button
+- Kept user prompts and assistant replies separate when they share a turn wrapper
+- Exported complete current message bodies instead of a nested whitespace fragment, preserving tables and code blocks
+- Attached buttons on initial load and after message/action-bar/composer remounts, while retaining legacy ChatGPT support
+
+### Technical
+- Added isolated browser regression tests with synthetic current and legacy ChatGPT markup
+
 ## [0.41] - 2026-08-04
 
 ### Added

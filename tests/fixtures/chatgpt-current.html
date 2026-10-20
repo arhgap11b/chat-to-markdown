@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="uk-UA">
+<head><meta charset="utf-8"><title>DOM regression chat</title></head>
+<body>
+  <aside class="group"><p>Sidebar content must not be exported.</p><button aria-label="Copy">Copy</button></aside>
+  <main>
+    <div data-content-search-turn-key="fallback-turn-6">
+      <div data-talvt-turn-state="complete">
+        <div class="flex flex-col">
+          <div class="block">
+            <div data-chatgpt-search-unit-key="fallback-turn-6:0:user" data-chatgpt-search-message-ids="user-1">
+              <div data-content-search-unit-key="fallback-turn-6:0:user">
+                <div data-user-message-bubble="true">
+                  <div class="whitespace-pre-wrap">
+                    <div data-markdown-text-tone="user-message">
+                      <p>First request with <strong>formatting</strong>.</p>
+                      <p>Keep the whole request.</p>
+                    </div>
+                  </div>
+                  <button data-markdown-copy="exclude">Show more</button>
+                </div>
+                <div class="turn-action-controls">
+                  <span class="contents" data-state="closed"><button aria-label="Копіювати повідомлення"><svg width="21"></svg></button></span>
+                  <button aria-label="Редагувати повідомлення">Edit</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="block">
+            <div data-content-search-unit-key="fallback-turn-6:2:assistant" data-chatgpt-search-message-ids="assistant-1 assistant-1">
+              <h4 data-conversation-role="assistant">ChatGPT said:</h4>
+              <div><div data-chatgpt-selection-message-id="assistant-1">
+                <div data-markdown-text-style="assistant-message">
+                  <h2>First answer</h2>
+                  <svg><style>.rendered-diagram-style { fill: red; }</style><text>Diagram label</text></svg>
+                  <p>Opening paragraph.</p>
+                  <span class="whitespace-pre-wrap" data-markdown-copy="blank-lines">
+</span>
+                  <div data-code-block="true">
+                    <div data-markdown-copy="exclude">Code toolbar <button aria-label="Копіювати код">Copy code</button></div>
+                    <div data-code-block-source="true"><code><span>const some_value = "*literal*";</span>
+<span>  console.log(some_value);</span></code></div>
+                  </div>
+                  <div data-code-block-source="true"><code>single_line()</code></div>
+                  <div><button aria-label="Копіювати таблицю">Copy table</button>
+                    <table><thead><tr><th>Item</th><th>Value</th></tr></thead>
+                      <tbody><tr><td>Alpha</td><td>42</td></tr></tbody></table>
+                  </div>
+                  <p>Last paragraph of the first answer.</p>
+                </div>
+              </div></div>
+            </div>
+          </div>
+        </div>
+        <div class="turn-action-controls"><div>
+          <span class="contents"><button aria-label="Копіювати"><svg width="21"></svg></button></span>
+          <button aria-label="Поділитися">Share</button>
+        </div></div>
+      </div>
+    </div>
+    <div data-content-search-turn-key="fallback-turn-7">
+      <div data-talvt-turn-state="complete">
+        <div>
+          <div data-chatgpt-search-message-ids="user-2">
+            <div data-content-search-unit-key="fallback-turn-7:0:user">
+              <div data-user-message-bubble="true"><div data-markdown-text-tone="user-message"><p>Second request.</p></div></div>
+              <div class="turn-action-controls"><span><button aria-label="Копіювати повідомлення">Copy</button></span></div>
+            </div>
+          </div>
+          <div data-content-search-unit-key="fallback-turn-7:2:assistant" data-chatgpt-search-message-ids="assistant-2">
+            <h4 data-conversation-role="assistant">ChatGPT said:</h4>
+            <div data-markdown-text-style="assistant-message"><p>Second answer.</p></div>
+          </div>
+        </div>
+        <div class="turn-action-controls"><span><button aria-label="Копіювати">Copy</button></span></div>
+      </div>
+    </div>
+  </main>
+  <form data-chatgpt-composer data-composer-placement="thread">
+    <div data-composer-footer-responsive>
+      <div><div class="flex">
+        <span class="contents"><button type="button" class="native-composer-button" data-composer-navigation-target="add-context" aria-label="Додати файли й інше">+</button></span>
+      </div></div>
+      <div contenteditable="true" data-composer-markdown role="textbox">Unsent draft must not be exported.</div>
+      <button type="button" aria-label="Диктувати">Microphone</button>
+    </div>
+  </form>
+</body>
+</html>
