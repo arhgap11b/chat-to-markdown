@@ -2411,7 +2411,12 @@
   }
 
   function createConversationButton() {
-    const voiceButtonContainer = document.querySelector('[data-testid="composer-speech-button-container"]');
+    const voiceButton = document.querySelector(
+      'button[aria-label="开始语音"], button[aria-label*="voice" i]'
+    );
+    const voiceButtonContainer = document.querySelector(
+      '[data-testid="composer-speech-button-container"]'
+    ) || voiceButton;
     const existingButton = document.querySelector(`.${CONVERSATION_BUTTON_CLASS}`);
 
     if (voiceButtonContainer) {
